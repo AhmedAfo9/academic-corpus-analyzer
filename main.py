@@ -5,8 +5,9 @@ import spacy
 import numpy as np
 import re
 import textstat
+from collections import Counter
 
-app = FastAPI(title="Academic Corpus Analyzer API")
+app = FastAPI(title="Academic Corpus Analyzer - Ultimate Diagnostic API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +47,9 @@ class CorpusInput(BaseModel):
     ai_text: str = ""
     humanized_text: str = ""
 
+class SingleInput(BaseModel):
+    text: str
+
 def get_sentence_depth(sent_doc):
     def walk_tree(node):
         if not list(node.children):
@@ -65,10 +69,18 @@ def analyze_single_corpus(text: str):
     total_words = len(words)
     total_sentences = len(sentences)
     
-    if total_words == 0 or total_sentences == 0:
+    if total_words < 5 or total_sentences == 0:
         return None
 
-    ttr = round(len(set(words)) / total_words, 3)
+    # Vocabulary Metrics
+    unique_words = len(set(words))
+    ttr = round(unique_words / total_words, 3)
+    guiraud_r = round(unique_words / np.sqrt(total_words), 2) # Length-independent richness
+    
+    word_counts = Counter(words)
+    hapax_count = sum(1 for w, c in word_counts.items() if c == 1)
+    hapax_ratio = round((hapax_count / total_words) * 100, 2)
+
     sentence_lengths = [len([t for t in s if t.is_alpha]) for s in sentences]
     mls = round(total_words / total_sentences, 2)
     burstiness = round(float(np.std(sentence_lengths)), 2) if len(sentence_lengths) > 1 else 0.0
@@ -98,6 +110,8 @@ def analyze_single_corpus(text: str):
         "words": total_words,
         "sentences": total_sentences,
         "ttr": ttr,
+        "guiraud_r": guiraud_r,
+        "hapax_ratio": hapax_ratio,
         "mls": mls,
         "lexical_density": lexical_density,
         "passive_ratio": passive_ratio,
@@ -109,9 +123,91 @@ def analyze_single_corpus(text: str):
         "readability_grade": readability_grade
     }
 
+def classify_single_text_logic(m):
+    # Advanced Multi-Dimensional Distance Scoring
+    w_human = 0.0
+    w_ai = 0.0
+    w_humanized = 0.0
+    flags = []
+
+    # 1. Lexical Sub-Score Evaluation
+    if m["lexical_density"] < 43.0:
+        w_humanized += 30.0
+        flags.append("Degraded Lexical Density (<43%): Strong indicator of functional padding used by AI Humanizers.")
+    elif m["lexical_density"] > 48.0:
+        w_human += 25.0
+        flags.append("High Content-Word Density (>48%): Authentic human informative packaging.")
+
+    if m["hapax_ratio"] < 35.0:
+        w_humanized += 20.0
+        w_ai += 15.0
+        flags.append("Low Hapax Legomena Ratio (<35%): Repetitive core vocabulary usage.")
+    elif m["hapax_ratio"] >= 42.0:
+        w_human += 20.0
+        flags.append("High Unique Vocabulary Spread (Hapax >= 42%): Natural lexical spontaneity.")
+
+    # 2. Syntactic & Academic Register
+    if m["awl_density"] > 1.4 and m["ttr"] < 0.52:
+        w_humanized += 30.0
+        flags.append("AWL Synonym Inflation with Low TTR: Disproportionate formal word swapping detected.")
+    elif m["awl_density"] > 2.2 and m["mls"] > 18.0:
+        w_ai += 35.0
+        flags.append("Elevated AWL Density with Extended MLS (>18): Standard Pure AI signature.")
+
+    # 3. Structural Variation & Entropy
+    if m["pos_transition_ratio"] < 0.33:
+        w_ai += 20.0
+        w_humanized += 20.0
+        flags.append("Low POS Transition Entropy (<0.33): Rigid, predictable grammatical transitions.")
+    elif m["pos_transition_ratio"] >= 0.35:
+        w_human += 25.0
+        flags.append("High Structural POS Entropy (>=0.35): Varied human sentence architecture.")
+
+    if m["ai_words_count"] > 0:
+        w_ai += 40.0
+        flags.append(f"Overt AI Transitional Buzzwords ({m['ai_words_count']} detected).")
+
+    if m["readability_grade"] < 8.5 and m["awl_density"] > 1.2:
+        w_humanized += 20.0
+        flags.append("Readability Downgrade with Academic Terms: Structural simplification artifact.")
+
+    # Calculate Probability Percentages
+    base_score = 33.3
+    tot_human = max(0.0, base_score + w_human)
+    tot_ai = max(0.0, base_score + w_ai)
+    tot_humanized = max(0.0, base_score + w_humanized)
+    
+    total = tot_human + tot_ai + tot_humanized
+    prob_human = round((tot_human / total) * 100, 1)
+    prob_ai = round((tot_ai / total) * 100, 1)
+    prob_humanized = round((tot_humanized / total) * 100, 1)
+
+    probs = {"Human Baseline": prob_human, "Pure AI": prob_ai, "AI-Humanized": prob_humanized}
+    predicted_class = max(probs, key=probs.get)
+
+    # Sub-scores calculation for deep analytics
+    lexical_score = round(min(100.0, max(0.0, (m["guiraud_r"] * 10) + (m["lexical_density"] * 0.8))), 1)
+    syntactic_score = round(min(100.0, max(0.0, (m["avg_tree_depth"] * 12) + (m["mls"] * 1.5))), 1)
+    entropy_score = round(min(100.0, max(0.0, m["pos_transition_ratio"] * 250)), 1)
+
+    return {
+        "predicted_class": predicted_class,
+        "probabilities": {
+            "human": prob_human,
+            "pure_ai": prob_ai,
+            "ai_humanized": prob_humanized
+        },
+        "sub_scores": {
+            "lexical_authenticity": lexical_score,
+            "syntactic_complexity": syntactic_score,
+            "stylistic_entropy": entropy_score
+        },
+        "diagnostic_flags": flags
+    }
+
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer Deep API is Running"}
+    return {"status": "Academic Corpus Analyzer Ultimate API is Live"}
 
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
@@ -121,7 +217,7 @@ def analyze_corpora(data: CorpusInput):
 
     valid_count = sum(1 for r in [human_res, ai_res, humanized_res] if r is not None)
     if valid_count < 2:
-        raise HTTPException(status_code=400, detail="At least 2 non-empty corpora are required for analysis.")
+        raise HTTPException(status_code=400, detail="At least 2 non-empty corpora are required for comparative analysis.")
 
     residual_footprint = 0.0
     if ai_res and humanized_res and human_res:
@@ -138,4 +234,20 @@ def analyze_corpora(data: CorpusInput):
             "ai_humanized": humanized_res
         },
         "residual_ai_footprint_percentage": residual_footprint
+    }
+
+@app.post("/analyze-single")
+def analyze_single_text(data: SingleInput):
+    if not data.text or not data.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+
+    metrics = analyze_single_corpus(data.text)
+    if not metrics:
+        raise HTTPException(status_code=400, detail="Text must contain valid words.")
+
+    classification = classify_single_text_logic(metrics)
+
+    return {
+        "metrics": metrics,
+        "classification": classification
     }
