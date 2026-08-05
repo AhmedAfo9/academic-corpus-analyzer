@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import spacy
@@ -42,9 +42,9 @@ AWL_WORDS = {
 }
 
 class CorpusInput(BaseModel):
-    human_text: str
-    ai_text: str
-    humanized_text: str
+    human_text: str = ""
+    ai_text: str = ""
+    humanized_text: str = ""
 
 def get_sentence_depth(sent_doc):
     def walk_tree(node):
@@ -55,14 +55,8 @@ def get_sentence_depth(sent_doc):
     return max([walk_tree(root) for root in roots]) if roots else 1
 
 def analyze_single_corpus(text: str):
-    if not text.strip():
-        return {
-            "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
-            "lexical_density": 0, "passive_ratio": 0, 
-            "burstiness": 0, "ai_words_count": 0,
-            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0,
-            "readability_grade": 0
-        }
+    if not text or not text.strip():
+        return None
 
     doc = nlp(text)
     words = [token.text.lower() for token in doc if token.is_alpha]
@@ -72,13 +66,7 @@ def analyze_single_corpus(text: str):
     total_sentences = len(sentences)
     
     if total_words == 0 or total_sentences == 0:
-        return {
-            "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
-            "lexical_density": 0, "passive_ratio": 0, 
-            "burstiness": 0, "ai_words_count": 0,
-            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0,
-            "readability_grade": 0
-        }
+        return None
 
     ttr = round(len(set(words)) / total_words, 3)
     sentence_lengths = [len([t for t in s if t.is_alpha]) for s in sentences]
@@ -131,12 +119,17 @@ def analyze_corpora(data: CorpusInput):
     ai_res = analyze_single_corpus(data.ai_text)
     humanized_res = analyze_single_corpus(data.humanized_text)
 
-    residual_footprint = 100.0
-    if ai_res["mls"] > 0 and human_res["mls"] > 0:
-        diff_ai_hum = abs(humanized_res["mls"] - ai_res["mls"])
-        diff_human_hum = abs(humanized_res["mls"] - human_res["mls"])
-        if (diff_ai_hum + diff_human_hum) > 0:
-            residual_footprint = round((diff_human_hum / (diff_ai_hum + diff_human_hum)) * 100, 1)
+    valid_count = sum(1 for r in [human_res, ai_res, humanized_res] if r is not None)
+    if valid_count < 2:
+        raise HTTPException(status_code=400, detail="At least 2 non-empty corpora are required for analysis.")
+
+    residual_footprint = 0.0
+    if ai_res and humanized_res and human_res:
+        if ai_res["mls"] > 0 and human_res["mls"] > 0:
+            diff_ai_hum = abs(humanized_res["mls"] - ai_res["mls"])
+            diff_human_hum = abs(humanized_res["mls"] - human_res["mls"])
+            if (diff_ai_hum + diff_human_hum) > 0:
+                residual_footprint = round((diff_human_hum / (diff_ai_hum + diff_human_hum)) * 100, 1)
 
     return {
         "metrics": {
