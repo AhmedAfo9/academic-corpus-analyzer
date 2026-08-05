@@ -4,3 +4,4 @@ spacy
 nltk
 pandas
 pydantic
+textstat

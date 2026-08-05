@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import spacy
 import numpy as np
 import re
+import textstat
 
 app = FastAPI(title="Academic Corpus Analyzer API")
 
@@ -59,7 +60,8 @@ def analyze_single_corpus(text: str):
             "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
             "lexical_density": 0, "passive_ratio": 0, 
             "burstiness": 0, "ai_words_count": 0,
-            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0
+            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0,
+            "readability_grade": 0
         }
 
     doc = nlp(text)
@@ -74,10 +76,10 @@ def analyze_single_corpus(text: str):
             "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
             "lexical_density": 0, "passive_ratio": 0, 
             "burstiness": 0, "ai_words_count": 0,
-            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0
+            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0,
+            "readability_grade": 0
         }
 
-    # 1. Surface Metrics
     ttr = round(len(set(words)) / total_words, 3)
     sentence_lengths = [len([t for t in s if t.is_alpha]) for s in sentences]
     mls = round(total_words / total_sentences, 2)
@@ -92,7 +94,6 @@ def analyze_single_corpus(text: str):
     text_lower = text.lower()
     ai_words_count = sum(len(re.findall(r'\b' + re.escape(word) + r'\b', text_lower)) for word in AI_BUZZWORDS)
 
-    # 2. Deep Linguistic Metrics
     awl_count = sum(1 for w in words if w in AWL_WORDS)
     awl_density = round((awl_count / total_words) * 100, 2)
 
@@ -102,6 +103,8 @@ def analyze_single_corpus(text: str):
     pos_tags = [token.pos_ for token in doc if token.is_alpha]
     pos_bigrams = [f"{pos_tags[i]}_{pos_tags[i+1]}" for i in range(len(pos_tags)-1)]
     pos_transition_ratio = round(len(set(pos_bigrams)) / len(pos_bigrams), 3) if pos_bigrams else 0.0
+
+    readability_grade = round(textstat.flesch_kincaid_grade(text), 2)
 
     return {
         "words": total_words,
@@ -114,7 +117,8 @@ def analyze_single_corpus(text: str):
         "ai_words_count": ai_words_count,
         "awl_density": awl_density,
         "avg_tree_depth": avg_tree_depth,
-        "pos_transition_ratio": pos_transition_ratio
+        "pos_transition_ratio": pos_transition_ratio,
+        "readability_grade": readability_grade
     }
 
 @app.get("/")
