@@ -72,10 +72,9 @@ def analyze_single_corpus(text: str):
     if total_words < 5 or total_sentences == 0:
         return None
 
-    # Vocabulary Metrics
     unique_words = len(set(words))
     ttr = round(unique_words / total_words, 3)
-    guiraud_r = round(unique_words / np.sqrt(total_words), 2) # Length-independent richness
+    guiraud_r = round(unique_words / np.sqrt(total_words), 2)
     
     word_counts = Counter(words)
     hapax_count = sum(1 for w, c in word_counts.items() if c == 1)
@@ -124,54 +123,53 @@ def analyze_single_corpus(text: str):
     }
 
 def classify_single_text_logic(m):
-    # Advanced Multi-Dimensional Distance Scoring
     w_human = 0.0
     w_ai = 0.0
     w_humanized = 0.0
     flags = []
 
-    # 1. Lexical Sub-Score Evaluation
-    if m["lexical_density"] < 43.0:
-        w_humanized += 30.0
-        flags.append("Degraded Lexical Density (<43%): Strong indicator of functional padding used by AI Humanizers.")
-    elif m["lexical_density"] > 48.0:
-        w_human += 25.0
-        flags.append("High Content-Word Density (>48%): Authentic human informative packaging.")
+    # 1. Lexical Sub-Score & Density
+    if m["lexical_density"] < 42.0:
+        w_humanized += 25.0
+        flags.append("Degraded Lexical Density (<42%): Functional padding used by AI Humanizers.")
+    elif m["lexical_density"] >= 45.0:
+        w_human += 30.0
+        flags.append("High Content-Word Density (>=45%): Authentic human informative packaging.")
 
     if m["hapax_ratio"] < 35.0:
-        w_humanized += 20.0
-        w_ai += 15.0
-        flags.append("Low Hapax Legomena Ratio (<35%): Repetitive core vocabulary usage.")
-    elif m["hapax_ratio"] >= 42.0:
-        w_human += 20.0
-        flags.append("High Unique Vocabulary Spread (Hapax >= 42%): Natural lexical spontaneity.")
+        w_humanized += 15.0
+        w_ai += 10.0
+        flags.append("Low Hapax Legomena Ratio (<35%): Core vocabulary repetition.")
+    elif m["hapax_ratio"] >= 40.0:
+        w_human += 30.0
+        flags.append("High Unique Vocabulary Spread (Hapax >= 40%): Natural lexical spontaneity.")
 
-    # 2. Syntactic & Academic Register
-    if m["awl_density"] > 1.4 and m["ttr"] < 0.52:
-        w_humanized += 30.0
-        flags.append("AWL Synonym Inflation with Low TTR: Disproportionate formal word swapping detected.")
-    elif m["awl_density"] > 2.2 and m["mls"] > 18.0:
+    # 2. Adjusted Academic Register & Sentence Length (Listings Protection)
+    if m["awl_density"] > 1.4 and m["ttr"] < 0.50:
+        w_humanized += 25.0
+        flags.append("AWL Synonym Inflation with Low TTR: Disproportionate formal word swapping.")
+    elif m["awl_density"] > 2.5 and m["ai_words_count"] > 0:
         w_ai += 35.0
-        flags.append("Elevated AWL Density with Extended MLS (>18): Standard Pure AI signature.")
+        flags.append("High Academic Vocab with AI Buzzwords: Pure AI fingerprint.")
+    elif m["mls"] > 22.0 and m["hapax_ratio"] >= 40.0:
+        # Long enumerative human academic sentences protection
+        w_human += 25.0
+        flags.append("Extended Sentence Enumeration with High Hapax: Authentic human academic structural outline.")
 
     # 3. Structural Variation & Entropy
-    if m["pos_transition_ratio"] < 0.33:
-        w_ai += 20.0
-        w_humanized += 20.0
-        flags.append("Low POS Transition Entropy (<0.33): Rigid, predictable grammatical transitions.")
-    elif m["pos_transition_ratio"] >= 0.35:
+    if m["pos_transition_ratio"] < 0.32:
+        w_ai += 15.0
+        w_humanized += 15.0
+        flags.append("Low POS Transition Entropy (<0.32): Rigid grammatical transitions.")
+    elif m["pos_transition_ratio"] >= 0.34:
         w_human += 25.0
-        flags.append("High Structural POS Entropy (>=0.35): Varied human sentence architecture.")
+        flags.append("High Structural POS Entropy (>=0.34): Varied human sentence architecture.")
 
     if m["ai_words_count"] > 0:
         w_ai += 40.0
         flags.append(f"Overt AI Transitional Buzzwords ({m['ai_words_count']} detected).")
 
-    if m["readability_grade"] < 8.5 and m["awl_density"] > 1.2:
-        w_humanized += 20.0
-        flags.append("Readability Downgrade with Academic Terms: Structural simplification artifact.")
-
-    # Calculate Probability Percentages
+    # Calculate Probabilities
     base_score = 33.3
     tot_human = max(0.0, base_score + w_human)
     tot_ai = max(0.0, base_score + w_ai)
@@ -185,9 +183,8 @@ def classify_single_text_logic(m):
     probs = {"Human Baseline": prob_human, "Pure AI": prob_ai, "AI-Humanized": prob_humanized}
     predicted_class = max(probs, key=probs.get)
 
-    # Sub-scores calculation for deep analytics
     lexical_score = round(min(100.0, max(0.0, (m["guiraud_r"] * 10) + (m["lexical_density"] * 0.8))), 1)
-    syntactic_score = round(min(100.0, max(0.0, (m["avg_tree_depth"] * 12) + (m["mls"] * 1.5))), 1)
+    syntactic_score = round(min(100.0, max(0.0, (m["avg_tree_depth"] * 12) + (m["mls"] * 1.2))), 1)
     entropy_score = round(min(100.0, max(0.0, m["pos_transition_ratio"] * 250)), 1)
 
     return {
@@ -207,7 +204,7 @@ def classify_single_text_logic(m):
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer Ultimate API is Live"}
+    return {"status": "Academic Corpus Analyzer Calibrated API is Live"}
 
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
