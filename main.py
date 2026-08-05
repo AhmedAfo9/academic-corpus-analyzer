@@ -28,22 +28,43 @@ AI_BUZZWORDS = [
     "comprehensive", "in conclusion", "it is worth noting", "furthermore"
 ]
 
+AWL_WORDS = {
+    "analyze", "approach", "assess", "assume", "authority", "available", "benefit",
+    "concept", "consistent", "constitutional", "context", "contract", "create",
+    "data", "definition", "derived", "distribution", "economic", "environment",
+    "established", "evidence", "factors", "financial", "formula", "function",
+    "identified", "income", "indicate", "individual", "interpretation", "involved",
+    "issues", "labour", "legal", "legislation", "major", "method", "occur",
+    "percent", "period", "policy", "principle", "procedure", "process", "required",
+    "research", "response", "role", "section", "sector", "significant", "similar",
+    "source", "specific", "structure", "theory", "variables"
+}
+
 class CorpusInput(BaseModel):
     human_text: str
     ai_text: str
     humanized_text: str
+
+def get_sentence_depth(sent_doc):
+    def walk_tree(node):
+        if not list(node.children):
+            return 1
+        return 1 + max(walk_tree(child) for child in node.children)
+    roots = [token for token in sent_doc if token.head == token]
+    return max([walk_tree(root) for root in roots]) if roots else 1
 
 def analyze_single_corpus(text: str):
     if not text.strip():
         return {
             "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
             "lexical_density": 0, "passive_ratio": 0, 
-            "burstiness": 0, "ai_words_count": 0
+            "burstiness": 0, "ai_words_count": 0,
+            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0
         }
 
     doc = nlp(text)
     words = [token.text.lower() for token in doc if token.is_alpha]
-    sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
+    sentences = [sent for sent in doc.sents if len(sent.text.strip()) > 0]
     
     total_words = len(words)
     total_sentences = len(sentences)
@@ -52,11 +73,13 @@ def analyze_single_corpus(text: str):
         return {
             "words": 0, "sentences": 0, "ttr": 0, "mls": 0, 
             "lexical_density": 0, "passive_ratio": 0, 
-            "burstiness": 0, "ai_words_count": 0
+            "burstiness": 0, "ai_words_count": 0,
+            "awl_density": 0, "avg_tree_depth": 0, "pos_transition_ratio": 0
         }
 
+    # 1. Surface Metrics
     ttr = round(len(set(words)) / total_words, 3)
-    sentence_lengths = [len([t for t in nlp(s) if t.is_alpha]) for s in sentences]
+    sentence_lengths = [len([t for t in s if t.is_alpha]) for s in sentences]
     mls = round(total_words / total_sentences, 2)
     burstiness = round(float(np.std(sentence_lengths)), 2) if len(sentence_lengths) > 1 else 0.0
 
@@ -64,10 +87,21 @@ def analyze_single_corpus(text: str):
     lexical_density = round((len(content_words) / total_words) * 100, 2)
 
     passive_instances = sum(1 for token in doc if token.dep_ in ("nsubjpass", "auxpass"))
-    passive_ratio = round((passive_instances / total_sentences) * 100, 2)
+    passive_ratio = min(round((passive_instances / total_sentences) * 100, 2), 100.0)
 
     text_lower = text.lower()
     ai_words_count = sum(len(re.findall(r'\b' + re.escape(word) + r'\b', text_lower)) for word in AI_BUZZWORDS)
+
+    # 2. Deep Linguistic Metrics
+    awl_count = sum(1 for w in words if w in AWL_WORDS)
+    awl_density = round((awl_count / total_words) * 100, 2)
+
+    tree_depths = [get_sentence_depth(s) for s in sentences]
+    avg_tree_depth = round(sum(tree_depths) / len(tree_depths), 2)
+
+    pos_tags = [token.pos_ for token in doc if token.is_alpha]
+    pos_bigrams = [f"{pos_tags[i]}_{pos_tags[i+1]}" for i in range(len(pos_tags)-1)]
+    pos_transition_ratio = round(len(set(pos_bigrams)) / len(pos_bigrams), 3) if pos_bigrams else 0.0
 
     return {
         "words": total_words,
@@ -77,12 +111,15 @@ def analyze_single_corpus(text: str):
         "lexical_density": lexical_density,
         "passive_ratio": passive_ratio,
         "burstiness": burstiness,
-        "ai_words_count": ai_words_count
+        "ai_words_count": ai_words_count,
+        "awl_density": awl_density,
+        "avg_tree_depth": avg_tree_depth,
+        "pos_transition_ratio": pos_transition_ratio
     }
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer API is Running"}
+    return {"status": "Academic Corpus Analyzer Deep API is Running"}
 
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
