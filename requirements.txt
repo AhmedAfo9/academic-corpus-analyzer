@@ -5,3 +5,4 @@ nltk
 pandas
 pydantic
 textstat
+httpx>=0.24.0
