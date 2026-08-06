@@ -7,12 +7,11 @@ from collections import Counter
 import numpy as np
 import spacy
 import textstat
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Academic Corpus Analyzer - Hybrid AI Engine v5")
+app = FastAPI(title="Academic Corpus Analyzer - Dual Interface Engine v5.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,10 +20,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# OpenRouter Configuration
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") # ضع مفتاحك هنا أو كمتغير بيئة في Render
-OPENROUTER_MODEL = "openai/gpt-4o-mini" # نموذج سريع، دقيق، ورخيص جداً
 
 try:
     nlp = spacy.load("en_core_web_sm")
@@ -40,13 +35,49 @@ STRONG_AI_CLICHE_PATTERNS = [
     r"\bplays? a (?:pivotal|crucial) role\b", r"\bstands? as a\b"
 ]
 
+AWL_WORDS = {
+    "analyze", "approach", "assess", "assume", "authority", "available", "benefit",
+    "concept", "consistent", "constitutional", "context", "contract", "create",
+    "data", "definition", "derived", "distribution", "economic", "environment",
+    "established", "evidence", "factors", "financial", "formula", "function",
+    "identified", "income", "indicate", "individual", "interpretation", "involved",
+    "issues", "labour", "legal", "legislation", "major", "method", "occur",
+    "percent", "period", "policy", "principle", "procedure", "process", "required",
+    "research", "response", "role", "section", "sector", "significant", "similar",
+    "source", "specific", "structure", "theory", "variables"
+}
+
+class CorpusInput(BaseModel):
+    human_text: str = ""
+    ai_text: str = ""
+    humanized_text: str = ""
+
 class SingleInput(BaseModel):
     text: str
 
-def analyze_stylometrics(text: str):
+def get_sentence_depth(sent_doc):
+    roots = [token for token in sent_doc if token.head == token]
+    if not roots:
+        return 1
+    max_depth = 1
+    for root in roots:
+        stack = [(root, 1)]
+        while stack:
+            node, depth = stack.pop()
+            if depth > max_depth:
+                max_depth = depth
+            for child in node.children:
+                stack.append((child, depth + 1))
+    return max_depth
+
+def analyze_single_corpus(text: str):
+    if not text or not text.strip():
+        return None
+
     doc = nlp(text)
     words = [token.text.lower() for token in doc if token.is_alpha]
     sentences = [sent for sent in doc.sents if len(sent.text.strip()) > 0]
+
     total_words = len(words)
     total_sentences = len(sentences)
 
@@ -54,123 +85,119 @@ def analyze_stylometrics(text: str):
         return None
 
     unique_words = len(set(words))
+    ttr = round(unique_words / total_words, 3)
     guiraud_r = round(float(unique_words / np.sqrt(total_words)), 2)
+
+    word_counts = Counter(words)
+    hapax_count = sum(1 for w, c in word_counts.items() if c == 1)
+    hapax_ratio = round((hapax_count / total_words) * 100, 2)
+
     sentence_lengths = [len([t for t in s if t.is_alpha]) for s in sentences]
+    mls = round(total_words / total_sentences, 2)
     burstiness = round(float(np.std(sentence_lengths)), 2) if len(sentence_lengths) > 1 else 0.0
 
     content_words = [token for token in doc if token.pos_ in ("NOUN", "VERB", "ADJ", "ADV")]
     lexical_density = round((len(content_words) / total_words) * 100, 2)
 
+    passive_instances = sum(
+        1 for token in doc if token.dep_ in ("nsubjpass", "auxpass", "nsubj:pass", "aux:pass")
+    )
+    passive_ratio = min(round((passive_instances / total_sentences) * 100, 2), 100.0)
+
+    text_lower = text.lower()
+    ai_words_count = sum(len(re.findall(pat, text_lower)) for pat in STRONG_AI_CLICHE_PATTERNS)
+
+    awl_count = sum(1 for w in words if w in AWL_WORDS)
+    awl_density = round((awl_count / total_words) * 100, 2)
+
+    tree_depths = [get_sentence_depth(s) for s in sentences]
+    avg_tree_depth = round(sum(tree_depths) / len(tree_depths), 2)
+
     pos_tags = [token.pos_ for token in doc if token.is_alpha]
     bigrams = [f"{pos_tags[i]}_{pos_tags[i + 1]}" for i in range(len(pos_tags) - 1)]
-    counts = Counter(bigrams)
-    total_b = len(bigrams)
-    probs = [c / total_b for c in counts.values()] if total_b > 0 else []
-    entropy = -sum(p * math.log2(p) for p in probs) if probs else 0.0
-    max_entropy = math.log2(len(counts)) if len(counts) > 1 else 1.0
-    norm_entropy = round(entropy / max_entropy, 3) if max_entropy > 0 else 0.0
+    pos_transition_ratio = round(len(set(bigrams)) / len(bigrams), 3) if bigrams else 0.0
+
+    try:
+        readability_grade = round(float(textstat.flesch_kincaid_grade(text)), 2)
+    except Exception:
+        readability_grade = None
 
     return {
         "words": total_words,
         "sentences": total_sentences,
+        "ttr": ttr,
         "guiraud_r": guiraud_r,
+        "hapax_ratio": hapax_ratio,
+        "mls": mls,
         "lexical_density": lexical_density,
+        "passive_ratio": passive_ratio,
         "burstiness": burstiness,
-        "pos_entropy_norm": norm_entropy,
-        "mls": round(total_words / total_sentences, 2)
+        "ai_words_count": ai_words_count,
+        "awl_density": awl_density,
+        "avg_tree_depth": avg_tree_depth,
+        "pos_transition_ratio": pos_transition_ratio,
+        "readability_grade": readability_grade,
     }
-
-async def call_openrouter_detector(text: str):
-    if not OPENROUTER_API_KEY:
-        return None
-
-    system_prompt = (
-        "You are an expert Forensic Stylometric Linguist specializing in detecting AI-generated text, "
-        "human writing, and AI paraphrasing (humanized text).\n"
-        "Analyze the provided text carefully for underlying LLM predictability, syntactic uniformness, "
-        "semantic density, and subtle paraphrasing footprints.\n"
-        "Return ONLY a JSON object with the following keys:\n"
-        "{\n"
-        '  "human_prob": float (0-100),\n'
-        '  "pure_ai_prob": float (0-100),\n'
-        '  "ai_humanized_prob": float (0-100),\n'
-        '  "verdict": string ("Human Baseline" | "Pure AI" | "AI-Humanized"),\n'
-        '  "confidence": string ("high" | "moderate" | "low"),\n'
-        '  "reasoning": string (concise explanation of linguistic evidence)\n'
-        "}"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Analyze this text:\n\n{text}"}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.1
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-            if response.status_code == 200:
-                result = response.json()
-                content = result["choices"][0]["message"]["content"]
-                return json.loads(content)
-    except Exception as e:
-        print(f"OpenRouter Error: {e}")
-    return None
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Hybrid v5 Engine is Live"}
+    return {"status": "Academic Corpus Analyzer - Dual Interface Engine is Live"}
 
+# المسار الخاص بالواجهة الأولى (التحليل المقارن للمدونات)
+@app.post("/analyze")
+def analyze_corpora(data: CorpusInput):
+    human_res = analyze_single_corpus(data.human_text)
+    ai_res = analyze_single_corpus(data.ai_text)
+    humanized_res = analyze_single_corpus(data.humanized_text)
+
+    valid_count = sum(1 for r in [human_res, ai_res, humanized_res] if r is not None)
+    if valid_count < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least 2 non-empty corpora are required for comparative analysis.",
+        )
+
+    residual_footprint = 0.0
+    if ai_res and humanized_res and human_res:
+        if ai_res["mls"] > 0 and human_res["mls"] > 0:
+            diff_ai_hum = abs(humanized_res["mls"] - ai_res["mls"])
+            diff_human_hum = abs(humanized_res["mls"] - human_res["mls"])
+            if (diff_ai_hum + diff_human_hum) > 0:
+                residual_footprint = round((diff_human_hum / (diff_ai_hum + diff_human_hum)) * 100, 1)
+
+    return {
+        "metrics": {
+            "human": human_res,
+            "pure_ai": ai_res,
+            "ai_humanized": humanized_res,
+        },
+        "residual_ai_footprint_percentage": residual_footprint,
+    }
+
+# المسار الخاص بالواجهة الثانية (الفحص الأحادي)
 @app.post("/analyze-single")
-async def analyze_single_text(data: SingleInput):
+def analyze_single_text(data: SingleInput):
     if not data.text or not data.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
-    metrics = analyze_stylometrics(data.text)
+    metrics = analyze_single_corpus(data.text)
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
-    # Call OpenRouter LLM Classifier
-    ai_evaluation = await call_openrouter_detector(data.text)
-
-    if ai_evaluation:
-        classification = {
-            "predicted_class": ai_evaluation.get("verdict", "Human Baseline"),
-            "confidence": ai_evaluation.get("confidence", "moderate"),
-            "probabilities": {
-                "human": ai_evaluation.get("human_prob", 33.3),
-                "pure_ai": ai_evaluation.get("pure_ai_prob", 33.3),
-                "ai_humanized": ai_evaluation.get("ai_humanized_prob", 33.3)
-            },
-            "sub_scores": {
-                "lexical_authenticity": round(metrics["guiraud_r"] * 10, 1),
-                "syntactic_complexity": round(metrics["mls"] * 1.5, 1),
-                "stylistic_entropy": round(metrics["pos_entropy_norm"] * 100, 1)
-            },
-            "diagnostic_flags": [ai_evaluation.get("reasoning", "Linguistic pattern evaluated via OpenRouter.")],
-            "disclaimer": "Hybrid evaluation powered by OpenRouter LLM & spaCy Stylometrics."
-        }
-    else:
-        # Fallback if API key is missing or fails
-        classification = {
-            "predicted_class": "Human Baseline",
-            "confidence": "low",
-            "probabilities": {"human": 100.0, "pure_ai": 0.0, "ai_humanized": 0.0},
-            "sub_scores": {"lexical_authenticity": 50, "syntactic_complexity": 50, "stylistic_entropy": 50},
-            "diagnostic_flags": ["API Key missing or unreachable. Standard fallback applied."],
-            "disclaimer": "Fallback mode active."
-        }
+    classification = {
+        "predicted_class": "Human Baseline" if metrics["ai_words_count"] == 0 else "Pure AI",
+        "confidence": "high",
+        "probabilities": {"human": 90.0 if metrics["ai_words_count"] == 0 else 10.0, "pure_ai": 10.0 if metrics["ai_words_count"] == 0 else 90.0, "ai_humanized": 0.0},
+        "sub_scores": {
+            "lexical_authenticity": round(metrics["guiraud_r"] * 10, 1),
+            "syntactic_complexity": round(metrics["mls"] * 1.5, 1),
+            "stylistic_entropy": round(metrics["pos_transition_ratio"] * 100, 1)
+        },
+        "diagnostic_flags": ["Corpus analysis completed successfully."],
+        "disclaimer": "Academic Corpus Engine Active."
+    }
 
     return {
         "metrics": metrics,
-        "classification": classification
+        "classification": classification,
     }
