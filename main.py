@@ -7,8 +7,12 @@ import spacy
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Dict, Any, Optional
 
-app = FastAPI(title="Academic Corpus Analyzer Engine")
+app = FastAPI(
+    title="Academic Corpus Analyzer - Research Engine",
+    description="Multidimensional Linguistic & Stylometric Analysis Platform"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +31,24 @@ except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
+FUNCTION_WORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
+    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+    "can't", "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't",
+    "down", "during", "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't", "have",
+    "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself", "him",
+    "himself", "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't",
+    "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself", "no", "nor",
+    "not", "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out",
+    "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some",
+    "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there",
+    "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through",
+    "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've",
+    "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
+    "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
+    "you're", "you've", "your", "yours", "yourself", "yourselves"
+}
+
 AWL_KEYWORDS = {
     "analysis", "approach", "area", "assessment", "assume", "authority", "available", "benefit",
     "concept", "consistent", "constitutional", "context", "contract", "create", "data", "definition",
@@ -44,7 +66,51 @@ AI_BUZZWORDS = {
     "holistic", "seamless", "synergy", "paradigm", "transformative", "elucidate"
 }
 
-def compute_full_metrics(text: str):
+# TAALED Methodology: MTLD Calculation
+def compute_mtld(tokens: List[str], threshold: float = 0.72) -> float:
+    if len(tokens) < 10:
+        return 0.0
+
+    def evaluate_factor_count(token_list):
+        factors = 0.0
+        current_types = set()
+        token_count = 0
+
+        for token in token_list:
+            token_count += 1
+            current_types.add(token)
+            ttr = len(current_types) / token_count
+            if ttr <= threshold:
+                factors += 1.0
+                current_types = set()
+                token_count = 0
+
+        if token_count > 0:
+            current_ttr = len(current_types) / token_count
+            if current_ttr < 1.0:
+                factors += (1.0 - current_ttr) / (1.0 - threshold)
+
+        return factors if factors > 0 else 1.0
+
+    forward = evaluate_factor_count(tokens)
+    backward = evaluate_factor_count(list(reversed(tokens)))
+    
+    mtld_val = (len(tokens) / forward + len(tokens) / backward) / 2.0
+    return round(float(mtld_val), 2)
+
+# TAALED Methodology: MATTR Calculation
+def compute_mattr(tokens: List[str], window_size: int = 50) -> float:
+    if len(tokens) < window_size:
+        return round(len(set(tokens)) / max(1, len(tokens)), 3)
+    
+    ttrs = []
+    for i in range(len(tokens) - window_size + 1):
+        window = tokens[i:i + window_size]
+        ttrs.append(len(set(window)) / window_size)
+    
+    return round(float(np.mean(ttrs)), 3)
+
+def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     if not text or not text.strip():
         return None
 
@@ -52,79 +118,139 @@ def compute_full_metrics(text: str):
     words = [token.text.lower() for token in doc if token.is_alpha]
     sentences = [sent for sent in doc.sents if len(sent.text.strip()) > 0]
 
-    total_words = len(words)
-    total_sentences = len(sentences)
+    N = len(words)
+    S = len(sentences)
 
-    if total_words < 3 or total_sentences == 0:
+    if N < 3 or S == 0:
         return None
 
-    unique_words = len(set(words))
-    ttr = round(unique_words / total_words, 3)
-    guiraud_r = round(float(unique_words / np.sqrt(total_words)), 2)
-    
+    V = len(set(words))
+
+    # 1. Lexical Diversity Suite (TAALED / Stylo)
+    ttr = round(V / N, 3)
+    guiraud_r = round(float(V / np.sqrt(N)), 2)
+    herdan_c = round(float(math.log(V) / math.log(N)), 3) if N > 1 and V > 1 else 0.0
+    maas_a = round(float((math.log(N) - math.log(V)) / (math.log(N) ** 2)), 3) if N > 1 and V > 1 else 0.0
+    mtld = compute_mtld(words)
+    mattr = compute_mattr(words)
+
     word_counts = {}
     for w in words:
         word_counts[w] = word_counts.get(w, 0) + 1
-    hapax_count = sum(1 for w, c in word_counts.items() if c == 1)
-    hapax_ratio = round((hapax_count / total_words) * 100, 1)
+    
+    hapax_count = sum(1 for c in word_counts.values() if c == 1)
+    dis_legomena_count = sum(1 for c in word_counts.values() if c == 2)
+    hapax_ratio = round((hapax_count / N) * 100, 1)
 
-    mls = round(total_words / total_sentences, 2)
+    # Content vs Function Words
+    function_count = sum(1 for w in words if w in FUNCTION_WORDS)
+    content_count = N - function_count
+    function_ratio = round((function_count / N) * 100, 1)
+    content_ratio = round((content_count / N) * 100, 1)
 
-    content_words = [token for token in doc if token.is_alpha and token.pos_ in {"NOUN", "VERB", "ADJ", "ADV"}]
-    lexical_density = round((len(content_words) / total_words) * 100, 1)
-
-    passive_count = sum(1 for token in doc if token.dep_ in {"passive", "auxpass"})
-    passive_ratio = round((passive_count / total_sentences) * 100, 1)
-
-    awl_count = sum(1 for w in words if w in AWL_KEYWORDS)
-    awl_density = round((awl_count / total_words) * 100, 1)
-
-    def get_depth(node):
+    # 2. Syntactic Dependency Suite (spaCy Dependency Parser)
+    def get_node_depth(node):
         if not list(node.children):
             return 1
-        return 1 + max(get_depth(child) for child in node.children)
+        return 1 + max(get_node_depth(child) for child in node.children)
 
-    tree_depths = [get_depth(sent.root) for sent in doc.sents]
-    avg_tree_depth = round(float(np.mean(tree_depths)), 1) if tree_depths else 1.0
+    tree_depths = [get_node_depth(sent.root) for sent in doc.sents]
+    mean_tree_depth = round(float(np.mean(tree_depths)), 2)
+    max_tree_depth = int(np.max(tree_depths))
+
+    dep_distances = []
+    passive_constructions = 0
+    prepositional_phrases = 0
+
+    for token in doc:
+        if token.head != token:
+            dep_distances.append(abs(token.i - token.head.i))
+        if token.dep_ in {"passive", "auxpass", "nsubjpass"}:
+            passive_constructions += 1
+        if token.pos_ == "ADP":
+            prepositional_phrases += 1
+
+    mean_dep_distance = round(float(np.mean(dep_distances)), 2) if dep_distances else 0.0
+    passive_ratio = round((passive_constructions / S) * 100, 1)
+    prep_phrase_density = round((prepositional_phrases / N) * 100, 1)
+
+    mls = round(N / S, 2)
+    sent_lengths = [len([t for t in sent if t.is_alpha]) for sent in doc.sents]
+    sent_length_sd = round(float(np.std(sent_lengths)), 2) if len(sent_lengths) > 1 else 0.0
+
+    # 3. POS Distribution & Entropy
+    pos_counts = {}
+    for token in doc:
+        if token.is_alpha:
+            pos_counts[token.pos_] = pos_counts.get(token.pos_, 0) + 1
+
+    pos_probs = [count / N for count in pos_counts.values()]
+    pos_entropy = round(float(-sum(p * math.log2(p) for p in pos_probs if p > 0)), 3)
 
     pos_tags = [token.pos_ for token in doc if token.is_alpha]
-    bigrams = [f"{pos_tags[i]}_{pos_tags[i + 1]}" for i in range(len(pos_tags) - 1)]
-    pos_transition_ratio = round(len(set(bigrams)) / len(bigrams), 3) if bigrams else 0.0
+    pos_bigrams = [f"{pos_tags[i]}_{pos_tags[i+1]}" for i in range(len(pos_tags)-1)]
+    pos_transition_ratio = round(len(set(pos_bigrams)) / max(1, len(pos_bigrams)), 3)
 
+    # 4. Punctuation Profile
+    punct_chars = {",": 0, ".": 0, ";": 0, ":": 0, "-": 0, "(": 0, ")": 0, "?": 0, "!": 0, '"': 0, "'": 0}
+    total_punct = 0
+    for char in text:
+        if char in punct_chars:
+            punct_chars[char] += 1
+            total_punct += 1
+
+    punct_density = round((total_punct / N) * 100, 1)
+
+    # 5. Academic & Stylometric Vocabulary
+    awl_count = sum(1 for w in words if w in AWL_KEYWORDS)
+    awl_density = round((awl_count / N) * 100, 1)
+    ai_buzzwords_count = sum(1 for w in words if w in AI_BUZZWORDS)
+
+    # 6. Readability Suite
     syllables = sum(len(re.findall(r'[aeiouy]+', w)) for w in words)
-    readability_grade = round(0.39 * (total_words / total_sentences) + 11.8 * (syllables / total_words) - 15.59, 1)
-    readability_grade = max(1.0, min(20.0, readability_grade))
-
-    sent_lengths = [len([t for t in sent if t.is_alpha]) for sent in doc.sents]
-    burstiness = round(float(np.std(sent_lengths)), 2) if len(sent_lengths) > 1 else 0.0
-
-    ai_words_count = sum(1 for w in words if w in AI_BUZZWORDS)
+    flesch_reading_ease = round(206.835 - 1.015 * (N / S) - 84.6 * (syllables / N), 1)
+    flesch_kincaid_grade = round(0.39 * (N / S) + 11.8 * (syllables / N) - 15.59, 1)
 
     return {
-        "words": total_words,
-        "sentences": total_sentences,
+        "words": N,
+        "sentences": S,
         "ttr": ttr,
         "guiraud_r": guiraud_r,
+        "herdan_c": herdan_c,
+        "maas_a": maas_a,
+        "mtld": mtld,
+        "mattr": mattr,
         "hapax_ratio": hapax_ratio,
+        "function_ratio": function_ratio,
+        "content_ratio": content_ratio,
         "mls": mls,
-        "lexical_density": lexical_density,
+        "sent_length_sd": sent_length_sd,
+        "mean_tree_depth": mean_tree_depth,
+        "max_tree_depth": max_tree_depth,
+        "mean_dep_distance": mean_dep_distance,
         "passive_ratio": passive_ratio,
-        "awl_density": awl_density,
-        "avg_tree_depth": avg_tree_depth,
+        "prep_phrase_density": prep_phrase_density,
+        "pos_entropy": pos_entropy,
         "pos_transition_ratio": pos_transition_ratio,
-        "readability_grade": readability_grade,
-        "burstiness": burstiness,
-        "ai_words_count": ai_words_count
+        "awl_density": awl_density,
+        "ai_buzzwords_count": ai_buzzwords_count,
+        "punct_density": punct_density,
+        "flesch_reading_ease": flesch_reading_ease,
+        "readability_grade": max(1.0, min(20.0, flesch_kincaid_grade))
     }
 
-# معادلة المسافة المتجهة (Vector Distance Analysis) المعايرة أكاديمياً
-def calculate_residual_vector_signal(m_a, m_b, m_c):
+def calculate_stylometric_vector_distance(m_a, m_b, m_c):
     if not (m_a and m_b and m_c):
         return 0.0
 
-    v_a = np.array([m_a['ttr']*10, m_a['mls']/10, m_a['lexical_density']/100, m_a['passive_ratio']/100, m_a['avg_tree_depth']/10, m_a['pos_transition_ratio']])
-    v_b = np.array([m_b['ttr']*10, m_b['mls']/10, m_b['lexical_density']/100, m_b['passive_ratio']/100, m_b['avg_tree_depth']/10, m_b['pos_transition_ratio']])
-    v_c = np.array([m_c['ttr']*10, m_c['mls']/10, m_c['lexical_density']/100, m_c['passive_ratio']/100, m_c['avg_tree_depth']/10, m_c['pos_transition_ratio']])
+    keys = ['ttr', 'guiraud_r', 'mtld', 'mls', 'mean_tree_depth', 'passive_ratio', 'pos_entropy', 'awl_density']
+    
+    v_a = np.array([m_a[k] for k in keys])
+    v_b = np.array([m_b[k] for k in keys])
+    v_c = np.array([m_c[k] for k in keys])
+
+    norm = np.linalg.norm(v_a) + 1e-9
+    v_a, v_b, v_c = v_a / norm, v_b / norm, v_c / norm
 
     dist_c_a = np.linalg.norm(v_c - v_a)
     dist_b_a = np.linalg.norm(v_b - v_a)
@@ -133,7 +259,7 @@ def calculate_residual_vector_signal(m_a, m_b, m_c):
         return 0.0
 
     signal_score = round(float((1.0 - (dist_c_a / (dist_c_a + dist_b_a))) * 100), 1)
-    return signal_score
+    return max(0.0, min(100.0, signal_score))
 
 async def query_modal_editlens(text: str):
     if not text or not text.strip():
@@ -149,62 +275,47 @@ async def query_modal_editlens(text: str):
                 probs = data.get("probs", [])
                 if len(probs) >= 2:
                     return round(probs[1] * 100, 1), None
-                elif len(probs) == 1:
-                    return round(probs[0] * 100, 1), None
             return 15.0, f"Status code: {res.status_code}"
         except Exception as e:
             return 15.0, str(e)
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Active Engine"}
+    return {"status": "Academic Corpus Analyzer - Research Engine Live"}
 
 @app.post("/analyze-single")
 async def analyze_single_text(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-
+    data = await request.json()
     text = data.get("text", "")
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
-    metrics = compute_full_metrics(text)
+    metrics = compute_comprehensive_metrics(text)
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
     ai_score, err = await query_modal_editlens(text)
 
-    if ai_score >= 50.0:
-        predicted_class = "Pure AI"
-    elif ai_score >= 20.0:
-        predicted_class = "AI-Humanized"
-    else:
-        predicted_class = "Human Baseline"
-
-    human_prob = round(max(0.0, 100.0 - ai_score), 1)
-    pure_ai_prob = round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1)
-    humanized_prob = round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
+    predicted_class = "Pure AI" if ai_score >= 50.0 else ("AI-Humanized" if ai_score >= 20.0 else "Human Baseline")
 
     return {
         "metrics": metrics,
         "classification": {
             "predicted_class": predicted_class,
             "probabilities": {
-                "human": human_prob,
-                "pure_ai": pure_ai_prob,
-                "ai_humanized": humanized_prob
+                "human": round(max(0.0, 100.0 - ai_score), 1),
+                "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1),
+                "ai_humanized": round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
             },
             "sub_scores": {
-                "lexical_authenticity": round(min(100.0, metrics["guiraud_r"] * 12), 1),
-                "syntactic_complexity": round(min(100.0, metrics["mls"] * 2.5), 1),
-                "stylistic_entropy": round(min(100.0, metrics["pos_transition_ratio"] * 100), 1)
+                "lexical_authenticity": round(min(100.0, metrics["mtld"] / 1.2), 1),
+                "syntactic_complexity": round(min(100.0, metrics["mean_tree_depth"] * 15), 1),
+                "stylistic_entropy": round(min(100.0, metrics["pos_entropy"] * 25), 1)
             },
             "diagnostic_flags": [
-                f"Neural Engine Evaluation: {ai_score}% AI probability footprint.",
-                f"Lexical Diversity Index (TTR): {metrics['ttr']}",
-                f"Syntactic Complexity (MLS): {metrics['mls']} words/sentence."
+                f"Model-Based Detection Score: {ai_score}% AI-associated stylistic footprint.",
+                f"MTLD Richness Score: {metrics['mtld']}",
+                f"Mean Dependency Tree Depth: {metrics['mean_tree_depth']}"
             ]
         }
     }
@@ -212,22 +323,15 @@ async def analyze_single_text(request: Request):
 @app.post("/analyze")
 @app.post("/analyze-corpus")
 async def analyze_corpora(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
+    data = await request.json()
 
     human_text = data.get("human_text", "")
     ai_text = data.get("ai_text", "")
     humanized_text = data.get("humanized_text", "")
 
-    inputs = [
-        ("human", human_text),
-        ("pure_ai", ai_text),
-        ("ai_humanized", humanized_text)
-    ]
+    inputs = [("human", human_text), ("pure_ai", ai_text), ("ai_humanized", humanized_text)]
 
-    active_tasks = []
+    tasks = []
     keys = []
     texts = []
 
@@ -235,20 +339,20 @@ async def analyze_corpora(request: Request):
         if txt and txt.strip():
             keys.append(key)
             texts.append(txt)
-            active_tasks.append(query_modal_editlens(txt))
+            tasks.append(query_modal_editlens(txt))
 
-    if not active_tasks:
+    if not tasks:
         raise HTTPException(status_code=400, detail="Please provide text in at least one corpus.")
 
-    ai_scores = await asyncio.gather(*active_tasks)
+    ai_scores = await asyncio.gather(*tasks)
 
     metrics_result = {}
     for key, txt, (score, err) in zip(keys, texts, ai_scores):
-        m = compute_full_metrics(txt)
+        m = compute_comprehensive_metrics(txt)
         if m:
             metrics_result[key] = m
 
-    residual_signal = calculate_residual_vector_signal(
+    residual_signal = calculate_stylometric_vector_distance(
         metrics_result.get("human"),
         metrics_result.get("pure_ai"),
         metrics_result.get("ai_humanized")
@@ -257,5 +361,6 @@ async def analyze_corpora(request: Request):
     return {
         "status": "success",
         "residual_ai_footprint_percentage": residual_signal,
+        "residual_ai_style_signal": residual_signal,
         "metrics": metrics_result
     }
