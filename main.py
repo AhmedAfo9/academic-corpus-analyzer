@@ -1,12 +1,11 @@
 import os
 import re
+import asyncio
 import numpy as np
 import spacy
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
 
 app = FastAPI(title="Academic Corpus Analyzer")
 
@@ -27,18 +26,6 @@ except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
-class SingleInput(BaseModel):
-    text: str
-
-class CorpusInput(BaseModel):
-    corpus_a: Optional[str] = ""
-    corpus_b: Optional[str] = ""
-    corpus_c: Optional[str] = ""
-    text_a: Optional[str] = ""
-    text_b: Optional[str] = ""
-    text_c: Optional[str] = ""
-    text: Optional[str] = ""
-
 def analyze_single_corpus(text: str):
     if not text or not text.strip():
         return None
@@ -50,7 +37,7 @@ def analyze_single_corpus(text: str):
     total_words = len(words)
     total_sentences = len(sentences)
 
-    if total_words < 5 or total_sentences == 0:
+    if total_words < 3 or total_sentences == 0:
         return None
 
     unique_words = len(set(words))
@@ -70,7 +57,11 @@ def analyze_single_corpus(text: str):
     }
 
 async def query_modal_editlens(text: str):
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    if not text or not text.strip():
+        return None, "Empty text"
+        
+    # إزالة المهلة كلياً لانتظار الفحص حتى الاكتمال
+    async with httpx.AsyncClient(timeout=None) as client:
         try:
             res = await client.post(MODAL_EDITLENS_URL, json={"text": text})
             if res.status_code == 200:
@@ -133,34 +124,59 @@ def home():
     return {"status": "Academic Corpus Analyzer - Active"}
 
 @app.post("/analyze-single")
-async def analyze_single_text(data: SingleInput):
-    if not data.text or not data.text.strip():
+async def analyze_single_text(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    text = data.get("text", "") or data.get("corpus_a", "")
+    if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
-    metrics = analyze_single_corpus(data.text)
+    metrics = analyze_single_corpus(text)
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
-    ai_score, err = await query_modal_editlens(data.text)
+    ai_score, err = await query_modal_editlens(text)
     return build_response_payload(metrics, ai_score, err)
 
 @app.post("/analyze")
 @app.post("/analyze-corpus")
-async def analyze_corpora(data: CorpusInput):
-    c_a = data.corpus_a or data.text_a or data.text
-    c_b = data.corpus_b or data.text_b
-    c_c = data.corpus_c or data.text_c
+@app.post("/api/analyze")
+async def analyze_corpora(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
 
-    results = {}
+    c_a = data.get("corpus_a") or data.get("text_a") or data.get("text") or ""
+    c_b = data.get("corpus_b") or data.get("text_b") or ""
+    c_c = data.get("corpus_c") or data.get("text_c") or ""
+
+    tasks = []
+    keys = []
+    texts = []
+
     for key, text_val in [("corpus_a", c_a), ("corpus_b", c_b), ("corpus_c", c_c)]:
         if text_val and text_val.strip():
-            m = analyze_single_corpus(text_val)
-            if m:
-                ai_s, err_msg = await query_modal_editlens(text_val)
-                results[key] = build_response_payload(m, ai_s, err_msg)
+            keys.append(key)
+            texts.append(text_val)
+            tasks.append(query_modal_editlens(text_val))
+
+    if not tasks:
+        raise HTTPException(status_code=400, detail="No valid text provided.")
+
+    ai_results = await asyncio.gather(*tasks)
+
+    results = {}
+    for key, text_val, (ai_s, err_msg) in zip(keys, texts, ai_results):
+        m = analyze_single_corpus(text_val)
+        if m:
+            results[key] = build_response_payload(m, ai_s, err_msg)
 
     if not results:
-        raise HTTPException(status_code=400, detail="No valid text provided in corpora.")
+        raise HTTPException(status_code=400, detail="Failed to process corpora.")
 
     return {
         "status": "success",
