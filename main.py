@@ -6,6 +6,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI(title="Academic Corpus Analyzer")
 
@@ -28,6 +29,15 @@ except OSError:
 
 class SingleInput(BaseModel):
     text: str
+
+class CorpusInput(BaseModel):
+    corpus_a: Optional[str] = ""
+    corpus_b: Optional[str] = ""
+    corpus_c: Optional[str] = ""
+    text_a: Optional[str] = ""
+    text_b: Optional[str] = ""
+    text_c: Optional[str] = ""
+    text: Optional[str] = ""
 
 def analyze_single_corpus(text: str):
     if not text or not text.strip():
@@ -76,21 +86,7 @@ async def query_modal_editlens(text: str):
         except Exception as e:
             return None, str(e)
 
-@app.get("/")
-def home():
-    return {"status": "Academic Corpus Analyzer - Active"}
-
-@app.post("/analyze-single")
-async def analyze_single_text(data: SingleInput):
-    if not data.text or not data.text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty.")
-
-    metrics = analyze_single_corpus(data.text)
-    if not metrics:
-        raise HTTPException(status_code=400, detail="Text must contain valid words.")
-
-    ai_score, err = await query_modal_editlens(data.text)
-
+def build_response_payload(metrics, ai_score, err):
     flags = []
     if ai_score is not None:
         if ai_score >= 50.0:
@@ -130,4 +126,44 @@ async def analyze_single_text(data: SingleInput):
     return {
         "metrics": metrics,
         "classification": classification,
+    }
+
+@app.get("/")
+def home():
+    return {"status": "Academic Corpus Analyzer - Active"}
+
+@app.post("/analyze-single")
+async def analyze_single_text(data: SingleInput):
+    if not data.text or not data.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+
+    metrics = analyze_single_corpus(data.text)
+    if not metrics:
+        raise HTTPException(status_code=400, detail="Text must contain valid words.")
+
+    ai_score, err = await query_modal_editlens(data.text)
+    return build_response_payload(metrics, ai_score, err)
+
+@app.post("/analyze")
+@app.post("/analyze-corpus")
+async def analyze_corpora(data: CorpusInput):
+    c_a = data.corpus_a or data.text_a or data.text
+    c_b = data.corpus_b or data.text_b
+    c_c = data.corpus_c or data.text_c
+
+    results = {}
+    for key, text_val in [("corpus_a", c_a), ("corpus_b", c_b), ("corpus_c", c_c)]:
+        if text_val and text_val.strip():
+            m = analyze_single_corpus(text_val)
+            if m:
+                ai_s, err_msg = await query_modal_editlens(text_val)
+                results[key] = build_response_payload(m, ai_s, err_msg)
+
+    if not results:
+        raise HTTPException(status_code=400, detail="No valid text provided in corpora.")
+
+    return {
+        "status": "success",
+        "results": results,
+        **results
     }
