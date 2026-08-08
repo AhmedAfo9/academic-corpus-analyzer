@@ -66,7 +66,6 @@ AI_BUZZWORDS = {
     "holistic", "seamless", "synergy", "paradigm", "transformative", "elucidate"
 }
 
-# TAALED Methodology: MTLD Calculation
 def compute_mtld(tokens: List[str], threshold: float = 0.72) -> float:
     if len(tokens) < 10:
         return 0.0
@@ -98,7 +97,6 @@ def compute_mtld(tokens: List[str], threshold: float = 0.72) -> float:
     mtld_val = (len(tokens) / forward + len(tokens) / backward) / 2.0
     return round(float(mtld_val), 2)
 
-# TAALED Methodology: MATTR Calculation
 def compute_mattr(tokens: List[str], window_size: int = 50) -> float:
     if len(tokens) < window_size:
         return round(len(set(tokens)) / max(1, len(tokens)), 3)
@@ -126,7 +124,7 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
 
     V = len(set(words))
 
-    # 1. Lexical Diversity Suite (TAALED / Stylo)
+    # 1. Lexical Diversity Suite
     ttr = round(V / N, 3)
     guiraud_r = round(float(V / np.sqrt(N)), 2)
     herdan_c = round(float(math.log(V) / math.log(N)), 3) if N > 1 and V > 1 else 0.0
@@ -139,16 +137,14 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
         word_counts[w] = word_counts.get(w, 0) + 1
     
     hapax_count = sum(1 for c in word_counts.values() if c == 1)
-    dis_legomena_count = sum(1 for c in word_counts.values() if c == 2)
     hapax_ratio = round((hapax_count / N) * 100, 1)
 
-    # Content vs Function Words
     function_count = sum(1 for w in words if w in FUNCTION_WORDS)
     content_count = N - function_count
     function_ratio = round((function_count / N) * 100, 1)
     content_ratio = round((content_count / N) * 100, 1)
 
-    # 2. Syntactic Dependency Suite (spaCy Dependency Parser)
+    # 2. Syntactic Dependency & Corrected Passive Voice Analysis
     def get_node_depth(node):
         if not list(node.children):
             return 1
@@ -159,30 +155,50 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     max_tree_depth = int(np.max(tree_depths))
 
     dep_distances = []
-    passive_constructions = 0
     prepositional_phrases = 0
+    total_verbs = 0
+    passive_verbs = 0
+    passive_sentences_count = 0
 
-    for token in doc:
-        if token.head != token:
-            dep_distances.append(abs(token.i - token.head.i))
-        if token.dep_ in {"passive", "auxpass", "nsubjpass"}:
-            passive_constructions += 1
-        if token.pos_ == "ADP":
-            prepositional_phrases += 1
+    for sent in doc.sents:
+        sent_has_passive = False
+        for token in sent:
+            if token.head != token:
+                dep_distances.append(abs(token.i - token.head.i))
+            if token.pos_ in {"VERB", "AUX"}:
+                total_verbs += 1
+            if token.dep_ in {"passive", "auxpass", "nsubjpass"}:
+                sent_has_passive = True
+                passive_verbs += 1
+            if token.pos_ == "ADP":
+                prepositional_phrases += 1
+        if sent_has_passive:
+            passive_sentences_count += 1
 
     mean_dep_distance = round(float(np.mean(dep_distances)), 2) if dep_distances else 0.0
-    passive_ratio = round((passive_constructions / S) * 100, 1)
+    
+    # تصحيح دقيق لمعادلة المبني للمجهول: نسبة الجمل التي تحتوي مبني للمجهول (المقياس المعياري)
+    passive_sentence_ratio = round((passive_sentences_count / S) * 100, 1)
+    # نسبة أفعال المبني للمجهول من إجمالي الأفعال
+    passive_verb_ratio = round((passive_verbs / max(1, total_verbs)) * 100, 1)
+
     prep_phrase_density = round((prepositional_phrases / N) * 100, 1)
 
     mls = round(N / S, 2)
     sent_lengths = [len([t for t in sent if t.is_alpha]) for sent in doc.sents]
     sent_length_sd = round(float(np.std(sent_lengths)), 2) if len(sent_lengths) > 1 else 0.0
 
-    # 3. POS Distribution & Entropy
+    # 3. POS Distribution, Entropy & Nominalization
     pos_counts = {}
+    noun_count = 0
+    verb_count = 0
     for token in doc:
         if token.is_alpha:
             pos_counts[token.pos_] = pos_counts.get(token.pos_, 0) + 1
+            if token.pos_ == "NOUN":
+                noun_count += 1
+            elif token.pos_ == "VERB":
+                verb_count += 1
 
     pos_probs = [count / N for count in pos_counts.values()]
     pos_entropy = round(float(-sum(p * math.log2(p) for p in pos_probs if p > 0)), 3)
@@ -191,7 +207,9 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     pos_bigrams = [f"{pos_tags[i]}_{pos_tags[i+1]}" for i in range(len(pos_tags)-1)]
     pos_transition_ratio = round(len(set(pos_bigrams)) / max(1, len(pos_bigrams)), 3)
 
-    # 4. Punctuation Profile
+    nominalization_ratio = round(noun_count / max(1, verb_count), 2)
+
+    # 4. Punctuation Profile & Entropy
     punct_chars = {",": 0, ".": 0, ";": 0, ":": 0, "-": 0, "(": 0, ")": 0, "?": 0, "!": 0, '"': 0, "'": 0}
     total_punct = 0
     for char in text:
@@ -200,6 +218,9 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
             total_punct += 1
 
     punct_density = round((total_punct / N) * 100, 1)
+    
+    punct_probs = [c / total_punct for c in punct_chars.values() if c > 0]
+    punct_entropy = round(float(-sum(p * math.log2(p) for p in punct_probs)), 3) if punct_probs else 0.0
 
     # 5. Academic & Stylometric Vocabulary
     awl_count = sum(1 for w in words if w in AWL_KEYWORDS)
@@ -228,13 +249,16 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
         "mean_tree_depth": mean_tree_depth,
         "max_tree_depth": max_tree_depth,
         "mean_dep_distance": mean_dep_distance,
-        "passive_ratio": passive_ratio,
+        "passive_ratio": passive_sentence_ratio,  # النسب المؤكدة الصحيحة
+        "passive_verb_ratio": passive_verb_ratio,
         "prep_phrase_density": prep_phrase_density,
         "pos_entropy": pos_entropy,
         "pos_transition_ratio": pos_transition_ratio,
+        "nominalization_ratio": nominalization_ratio,
         "awl_density": awl_density,
         "ai_buzzwords_count": ai_buzzwords_count,
         "punct_density": punct_density,
+        "punct_entropy": punct_entropy,
         "flesch_reading_ease": flesch_reading_ease,
         "readability_grade": max(1.0, min(20.0, flesch_kincaid_grade))
     }
@@ -315,7 +339,8 @@ async def analyze_single_text(request: Request):
             "diagnostic_flags": [
                 f"Model-Based Detection Score: {ai_score}% AI-associated stylistic footprint.",
                 f"MTLD Richness Score: {metrics['mtld']}",
-                f"Mean Dependency Tree Depth: {metrics['mean_tree_depth']}"
+                f"Mean Dependency Tree Depth: {metrics['mean_tree_depth']}",
+                f"Passive Sentence Ratio: {metrics['passive_ratio']}%"
             ]
         }
     }
@@ -339,7 +364,7 @@ async def analyze_corpora(request: Request):
         if txt and txt.strip():
             keys.append(key)
             texts.append(txt)
-            tasks.append(query_modal_editlens(txt))
+            active_tasks = tasks.append(query_modal_editlens(txt))
 
     if not tasks:
         raise HTTPException(status_code=400, detail="Please provide text in at least one corpus.")
