@@ -30,11 +30,6 @@ except OSError:
 class SingleInput(BaseModel):
     text: str
 
-class CompareInput(BaseModel):
-    corpus_a: str
-    corpus_b: str
-    corpus_c: str
-
 def analyze_single_corpus(text: str):
     if not text or not text.strip():
         return None
@@ -119,19 +114,33 @@ async def analyze_single_text(data: SingleInput):
 
 @app.post("/analyze")
 @app.post("/compare")
-async def compare_corpora(data: CompareInput):
-    metrics_a = analyze_single_corpus(data.corpus_a)
-    metrics_b = analyze_single_corpus(data.corpus_b)
-    metrics_c = analyze_single_corpus(data.corpus_c)
+async def compare_corpora(payload: dict):
+    # استخراج النصوص بمرونة مهما كانت أسماء المتغيرات القادمة من الفرونت إند
+    text_a = payload.get("corpus_a") or payload.get("corpusA") or payload.get("text_a") or payload.get("textA")
+    text_b = payload.get("corpus_b") or payload.get("corpusB") or payload.get("text_b") or payload.get("textB")
+    text_c = payload.get("corpus_c") or payload.get("corpusC") or payload.get("text_c") or payload.get("textC")
 
-    if not metrics_a or not metrics_b or not metrics_c:
+    # في حال كانت المفاتيح مخصصة كلياً، نأخذ أول ثلاثة قيم نصية من القاموس
+    if not (text_a and text_b and text_c):
+        str_values = [str(v) for v in payload.values() if isinstance(v, str) and v.strip()]
+        if len(str_values) >= 3:
+            text_a, text_b, text_c = str_values[0], str_values[1], str_values[2]
+
+    if not (text_a and text_b and text_c):
+        raise HTTPException(status_code=400, detail="Three text inputs are required.")
+
+    metrics_a = analyze_single_corpus(text_a)
+    metrics_b = analyze_single_corpus(text_b)
+    metrics_c = analyze_single_corpus(text_c)
+
+    if not (metrics_a and metrics_b and metrics_c):
         raise HTTPException(status_code=400, detail="All corpora must contain valid text.")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         score_a, score_b, score_c = await asyncio.gather(
-            query_modal_editlens(client, data.corpus_a),
-            query_modal_editlens(client, data.corpus_b),
-            query_modal_editlens(client, data.corpus_c)
+            query_modal_editlens(client, text_a),
+            query_modal_editlens(client, text_b),
+            query_modal_editlens(client, text_c)
         )
 
     return {
