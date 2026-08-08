@@ -1,5 +1,3 @@
-import json
-import math
 import os
 import re
 from collections import Counter
@@ -12,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Academic Corpus Analyzer - EditLens Engine v6.1")
+app = FastAPI(title="Academic Corpus Analyzer - Real EditLens Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,8 +20,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-HF_MODEL = "pangram/editlens_roberta-large"
+# رابط سيرفر Modal العصبي الحقيقي المخصص لمشروعك
+MODAL_EDITLENS_URL = "https://ahmedfalahoraibi--editlens-engine-editlensserver-predict.modal.run"
 
 try:
     nlp = spacy.load("en_core_web_sm")
@@ -143,30 +141,25 @@ def analyze_single_corpus(text: str):
         "readability_grade": readability_grade,
     }
 
-async def call_editlens_hf_api(text: str):
-    if not HF_TOKEN:
-        return {"error": "HF_TOKEN environment variable is not set on Render."}
-
-    # الرابط الجديد المحدث لخوادم Hugging Face Router
-    url = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN.strip()}"}
-    payload = {"inputs": text}
-
-    try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 503:
-                return {"error": "Model is warming up on Hugging Face. Please retry in 15 seconds."}
-            else:
-                return {"error": f"HF Router HTTP {response.status_code}: {response.text}"}
-    except Exception as e:
-        return {"error": f"Connection Exception: {str(e)}"}
+async def query_modal_editlens(text: str):
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            res = await client.post(MODAL_EDITLENS_URL, json={"text": text})
+            if res.status_code == 200:
+                data = res.json()
+                probs = data.get("probs", [])
+                if len(probs) >= 2:
+                    ai_prob = probs[1]
+                    return round(ai_prob * 100, 1), None
+                elif len(probs) == 1:
+                    return round(probs[0] * 100, 1), None
+            return None, f"Modal status code: {res.status_code}"
+        except Exception as e:
+            return None, str(e)
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - EditLens Engine v6.1 is Live"}
+    return {"status": "Academic Corpus Analyzer - EditLens Neural Engine Active"}
 
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
@@ -207,58 +200,28 @@ async def analyze_single_text(data: SingleInput):
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
-    hf_resp = await call_editlens_hf_api(data.text)
+    ai_score, err = await query_modal_editlens(data.text)
 
-    predicted_class = "Human Baseline"
-    confidence = "moderate"
-    ai_score = 0.0
     flags = []
-
-    if isinstance(hf_resp, list) and len(hf_resp) > 0:
-        items = hf_resp[0] if isinstance(hf_resp[0], list) else hf_resp
-        
-        ai_prob = 0.0
-        human_prob = 0.0
-        
-        for item in items:
-            lbl = str(item.get("label", "")).upper()
-            sc = float(item.get("score", 0.0))
-            if "LABEL_1" in lbl or "AI" in lbl or "EDIT" in lbl:
-                ai_prob = sc
-            elif "LABEL_0" in lbl or "HUMAN" in lbl:
-                human_prob = sc
-        
-        if ai_prob > 0.0 or human_prob > 0.0:
-            total = ai_prob + human_prob
-            ai_score = round((ai_prob / total) * 100, 1) if total > 0 else round(ai_prob * 100, 1)
-        else:
-            top_item = max(items, key=lambda x: x.get("score", 0.0)) if items else {}
-            ai_score = round(top_item.get("score", 0.0) * 100, 1)
-
-        if ai_score >= 65.0:
+    if ai_score is not None:
+        if ai_score >= 60.0:
             predicted_class = "Pure AI"
         elif ai_score >= 30.0:
             predicted_class = "AI-Humanized"
         else:
             predicted_class = "Human Baseline"
 
-        flags.append(f"EditLens Neural Model: {ai_score}% AI intervention detected.")
-        confidence = "high" if abs(ai_score - 50.0) > 25.0 else "moderate"
-
-    elif isinstance(hf_resp, dict) and "error" in hf_resp:
-        flags.append(f"HuggingFace Notice: {hf_resp['error']}")
-        if metrics["ai_words_count"] > 0:
-            predicted_class = "Pure AI"
-            ai_score = 85.0
-        else:
-            predicted_class = "Human Baseline"
-            ai_score = 10.0
+        confidence = "high" if abs(ai_score - 50.0) > 20.0 else "moderate"
+        flags.append(f"Official EditLens ICLR 2026 Model: {ai_score}% AI modification footprint.")
     else:
-        flags.append("EditLens prediction evaluated.")
+        flags.append(f"Modal Engine Notice: {err or 'Fallback active'}")
+        ai_score = 15.0 if metrics["ai_words_count"] == 0 else 75.0
+        predicted_class = "Human Baseline" if metrics["ai_words_count"] == 0 else "Pure AI"
+        confidence = "low"
 
     probs = {
         "human": round(max(0.0, 100.0 - ai_score), 1),
-        "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.6, 1),
+        "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1),
         "ai_humanized": round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
     }
 
@@ -272,7 +235,7 @@ async def analyze_single_text(data: SingleInput):
             "stylistic_entropy": round(metrics["pos_transition_ratio"] * 100, 1)
         },
         "diagnostic_flags": flags,
-        "disclaimer": "EditLens Neural Intervention Analysis (ICLR 2026 Model Architecture)."
+        "disclaimer": "Official EditLens RoBERTa Large Neural Architecture (ICLR 2026)."
     }
 
     return {
