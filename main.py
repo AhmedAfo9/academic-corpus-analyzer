@@ -29,25 +29,6 @@ except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
-STRONG_AI_CLICHE_PATTERNS = [
-    r"\bdelves?\b", r"\bdelving\b", r"\btapestry\b", r"\bmultifaceted\b",
-    r"\btestament to\b", r"\bunderscores?\b", r"\bunderscoring\b",
-    r"\binterplay\b", r"\bfoster(?:s|ing)? a\b", r"\bvibrant\b",
-    r"\bplays? a (?:pivotal|crucial) role\b", r"\bstands? as a\b"
-]
-
-AWL_WORDS = {
-    "analyze", "approach", "assess", "assume", "authority", "available", "benefit",
-    "concept", "consistent", "constitutional", "context", "contract", "create",
-    "data", "definition", "derived", "distribution", "economic", "environment",
-    "established", "evidence", "factors", "financial", "formula", "function",
-    "identified", "income", "indicate", "individual", "interpretation", "involved",
-    "issues", "labour", "legal", "legislation", "major", "method", "occur",
-    "percent", "period", "policy", "principle", "procedure", "process", "required",
-    "research", "response", "role", "section", "sector", "significant", "similar",
-    "source", "specific", "structure", "theory", "variables"
-}
-
 class SingleInput(BaseModel):
     text: str
 
@@ -89,7 +70,6 @@ async def query_modal_editlens(text: str):
                 data = res.json()
                 probs = data.get("probs", [])
                 if len(probs) >= 2:
-                    # Index 1 is AI Probability in SamLowe model
                     ai_prob = probs[1]
                     return round(ai_prob * 100, 1), None
             return None, f"Status code: {res.status_code}"
@@ -121,7 +101,7 @@ async def analyze_single_text(data: SingleInput):
             predicted_class = "Human Baseline"
 
         confidence = "high" if abs(ai_score - 50.0) > 20.0 else "moderate"
-        flags.append(f"Official EditLens Neural Model: {ai_score}% AI probability footprint.")
+        flags.append(f"Official Neural Engine: {ai_score}% AI probability footprint.")
     else:
         flags.append(f"Modal Engine Notice: {err or 'Fallback active'}")
         ai_score = 15.0
