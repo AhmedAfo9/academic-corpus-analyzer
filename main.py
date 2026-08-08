@@ -27,7 +27,6 @@ except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
-# قائمة الكلمات الأكاديمية الشائعة (AWL Sample)
 AWL_KEYWORDS = {
     "analysis", "approach", "area", "assessment", "assume", "authority", "available", "benefit",
     "concept", "consistent", "constitutional", "context", "contract", "create", "data", "definition",
@@ -39,7 +38,6 @@ AWL_KEYWORDS = {
     "structure", "theory", "variables", "academic", "fundamental", "empirical", "methodology"
 }
 
-# كلمات الذكاء الاصطناعي الشائعة (AI Buzzwords)
 AI_BUZZWORDS = {
     "delve", "realm", "tapestry", "testament", "pivotal", "underscore", "crucial", "multifaceted",
     "interplay", "beacon", "paramount", "fostering", "harnessing", "unwavering", "vibrant",
@@ -61,39 +59,26 @@ def compute_full_metrics(text: str):
         return None
 
     unique_words = len(set(words))
-    
-    # 1. TTR
     ttr = round(unique_words / total_words, 3)
-    
-    # 2. Guiraud's R Index
     guiraud_r = round(float(unique_words / np.sqrt(total_words)), 2)
     
-    # 3. Hapax Legomena Ratio (%)
     word_counts = {}
     for w in words:
         word_counts[w] = word_counts.get(w, 0) + 1
     hapax_count = sum(1 for w, c in word_counts.items() if c == 1)
     hapax_ratio = round((hapax_count / total_words) * 100, 1)
 
-    # 4. MLS
     mls = round(total_words / total_sentences, 2)
 
-    # 5. Lexical Density (%)
     content_words = [token for token in doc if token.is_alpha and token.pos_ in {"NOUN", "VERB", "ADJ", "ADV"}]
     lexical_density = round((len(content_words) / total_words) * 100, 1)
 
-    # 6. Passive Voice Ratio (%)
-    passive_count = 0
-    for token in doc:
-        if token.dep_ in {"passive", "auxpass"}:
-            passive_count += 1
+    passive_count = sum(1 for token in doc if token.dep_ in {"passive", "auxpass"})
     passive_ratio = round((passive_count / total_sentences) * 100, 1)
 
-    # 7. AWL Density (%)
     awl_count = sum(1 for w in words if w in AWL_KEYWORDS)
     awl_density = round((awl_count / total_words) * 100, 1)
 
-    # 8. Avg Dependency Tree Depth
     def get_depth(node):
         if not list(node.children):
             return 1
@@ -102,21 +87,17 @@ def compute_full_metrics(text: str):
     tree_depths = [get_depth(sent.root) for sent in doc.sents]
     avg_tree_depth = round(float(np.mean(tree_depths)), 1) if tree_depths else 1.0
 
-    # 9. POS Transition Ratio (Entropy)
     pos_tags = [token.pos_ for token in doc if token.is_alpha]
     bigrams = [f"{pos_tags[i]}_{pos_tags[i + 1]}" for i in range(len(pos_tags) - 1)]
     pos_transition_ratio = round(len(set(bigrams)) / len(bigrams), 3) if bigrams else 0.0
 
-    # 10. Readability Grade Level (Flesch-Kincaid Estimate)
     syllables = sum(len(re.findall(r'[aeiouy]+', w)) for w in words)
     readability_grade = round(0.39 * (total_words / total_sentences) + 11.8 * (syllables / total_words) - 15.59, 1)
     readability_grade = max(1.0, min(20.0, readability_grade))
 
-    # 11. Burstiness (Sentence Length Variance)
     sent_lengths = [len([t for t in sent if t.is_alpha]) for sent in doc.sents]
     burstiness = round(float(np.std(sent_lengths)), 2) if len(sent_lengths) > 1 else 0.0
 
-    # 12. AI Buzzwords Count
     ai_words_count = sum(1 for w in words if w in AI_BUZZWORDS)
 
     return {
@@ -135,6 +116,24 @@ def compute_full_metrics(text: str):
         "burstiness": burstiness,
         "ai_words_count": ai_words_count
     }
+
+# معادلة المسافة المتجهة (Vector Distance Analysis) المعايرة أكاديمياً
+def calculate_residual_vector_signal(m_a, m_b, m_c):
+    if not (m_a and m_b and m_c):
+        return 0.0
+
+    v_a = np.array([m_a['ttr']*10, m_a['mls']/10, m_a['lexical_density']/100, m_a['passive_ratio']/100, m_a['avg_tree_depth']/10, m_a['pos_transition_ratio']])
+    v_b = np.array([m_b['ttr']*10, m_b['mls']/10, m_b['lexical_density']/100, m_b['passive_ratio']/100, m_b['avg_tree_depth']/10, m_b['pos_transition_ratio']])
+    v_c = np.array([m_c['ttr']*10, m_c['mls']/10, m_c['lexical_density']/100, m_c['passive_ratio']/100, m_c['avg_tree_depth']/10, m_c['pos_transition_ratio']])
+
+    dist_c_a = np.linalg.norm(v_c - v_a)
+    dist_b_a = np.linalg.norm(v_b - v_a)
+
+    if (dist_c_a + dist_b_a) == 0:
+        return 0.0
+
+    signal_score = round(float((1.0 - (dist_c_a / (dist_c_a + dist_b_a))) * 100), 1)
+    return signal_score
 
 async def query_modal_editlens(text: str):
     if not text or not text.strip():
@@ -158,7 +157,7 @@ async def query_modal_editlens(text: str):
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Fully Synchronized"}
+    return {"status": "Academic Corpus Analyzer - Active Engine"}
 
 @app.post("/analyze-single")
 async def analyze_single_text(request: Request):
@@ -244,20 +243,19 @@ async def analyze_corpora(request: Request):
     ai_scores = await asyncio.gather(*active_tasks)
 
     metrics_result = {}
-    score_map = {}
-
     for key, txt, (score, err) in zip(keys, texts, ai_scores):
         m = compute_full_metrics(txt)
         if m:
             metrics_result[key] = m
-            score_map[key] = score
 
-    score_ai = score_map.get("pure_ai", 0.0)
-    score_hum = score_map.get("ai_humanized", 0.0)
-    residual_footprint = round(abs(score_ai - score_hum), 1) if ("pure_ai" in score_map and "ai_humanized" in score_map) else round(score_hum, 1)
+    residual_signal = calculate_residual_vector_signal(
+        metrics_result.get("human"),
+        metrics_result.get("pure_ai"),
+        metrics_result.get("ai_humanized")
+    )
 
     return {
         "status": "success",
-        "residual_ai_footprint_percentage": residual_footprint,
+        "residual_ai_footprint_percentage": residual_signal,
         "metrics": metrics_result
     }
