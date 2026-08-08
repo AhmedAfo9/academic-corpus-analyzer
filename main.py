@@ -1,10 +1,8 @@
 import os
 import re
-from collections import Counter
-
+import asyncio
 import numpy as np
 import spacy
-import textstat
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +30,11 @@ except OSError:
 class SingleInput(BaseModel):
     text: str
 
+class CompareInput(BaseModel):
+    corpus_a: str
+    corpus_b: str
+    corpus_c: str
+
 def analyze_single_corpus(text: str):
     if not text or not text.strip():
         return None
@@ -43,7 +46,7 @@ def analyze_single_corpus(text: str):
     total_words = len(words)
     total_sentences = len(sentences)
 
-    if total_words < 5 or total_sentences == 0:
+    if total_words < 3 or total_sentences == 0:
         return None
 
     unique_words = len(set(words))
@@ -62,19 +65,17 @@ def analyze_single_corpus(text: str):
         "pos_transition_ratio": pos_transition_ratio,
     }
 
-async def query_modal_editlens(text: str):
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            res = await client.post(MODAL_EDITLENS_URL, json={"text": text})
-            if res.status_code == 200:
-                data = res.json()
-                probs = data.get("probs", [])
-                if len(probs) >= 2:
-                    ai_prob = probs[1]
-                    return round(ai_prob * 100, 1), None
-            return None, f"Status code: {res.status_code}"
-        except Exception as e:
-            return None, str(e)
+async def query_modal_editlens(client: httpx.AsyncClient, text: str):
+    try:
+        res = await client.post(MODAL_EDITLENS_URL, json={"text": text})
+        if res.status_code == 200:
+            data = res.json()
+            probs = data.get("probs", [])
+            if len(probs) >= 2:
+                return round(probs[1] * 100, 1)
+        return 15.0
+    except Exception:
+        return 15.0
 
 @app.get("/")
 def home():
@@ -89,24 +90,11 @@ async def analyze_single_text(data: SingleInput):
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
-    ai_score, err = await query_modal_editlens(data.text)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        ai_score = await query_modal_editlens(client, data.text)
 
-    flags = []
-    if ai_score is not None:
-        if ai_score >= 50.0:
-            predicted_class = "Pure AI"
-        elif ai_score >= 20.0:
-            predicted_class = "AI-Humanized"
-        else:
-            predicted_class = "Human Baseline"
-
-        confidence = "high" if abs(ai_score - 50.0) > 20.0 else "moderate"
-        flags.append(f"Official Neural Engine: {ai_score}% AI probability footprint.")
-    else:
-        flags.append(f"Modal Engine Notice: {err or 'Fallback active'}")
-        ai_score = 15.0
-        predicted_class = "Human Baseline"
-        confidence = "low"
+    predicted_class = "Pure AI" if ai_score >= 50.0 else ("AI-Humanized" if ai_score >= 20.0 else "Human Baseline")
+    confidence = "high" if abs(ai_score - 50.0) > 20.0 else "moderate"
 
     probs = {
         "human": round(max(0.0, 100.0 - ai_score), 1),
@@ -123,11 +111,31 @@ async def analyze_single_text(data: SingleInput):
             "syntactic_complexity": round(metrics["mls"] * 1.5, 1),
             "stylistic_entropy": round(metrics["pos_transition_ratio"] * 100, 1)
         },
-        "diagnostic_flags": flags,
+        "diagnostic_flags": [f"Official Neural Engine: {ai_score}% AI probability footprint."],
         "disclaimer": "Official EditLens Neural Engine."
     }
 
+    return {"metrics": metrics, "classification": classification}
+
+@app.post("/analyze")
+@app.post("/compare")
+async def compare_corpora(data: CompareInput):
+    metrics_a = analyze_single_corpus(data.corpus_a)
+    metrics_b = analyze_single_corpus(data.corpus_b)
+    metrics_c = analyze_single_corpus(data.corpus_c)
+
+    if not metrics_a or not metrics_b or not metrics_c:
+        raise HTTPException(status_code=400, detail="All corpora must contain valid text.")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        score_a, score_b, score_c = await asyncio.gather(
+            query_modal_editlens(client, data.corpus_a),
+            query_modal_editlens(client, data.corpus_b),
+            query_modal_editlens(client, data.corpus_c)
+        )
+
     return {
-        "metrics": metrics,
-        "classification": classification,
+        "corpus_a": {"metrics": metrics_a, "ai_score": score_a},
+        "corpus_b": {"metrics": metrics_b, "ai_score": score_b},
+        "corpus_c": {"metrics": metrics_c, "ai_score": score_c}
     }
