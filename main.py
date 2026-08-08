@@ -7,11 +7,12 @@ from collections import Counter
 import numpy as np
 import spacy
 import textstat
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Academic Corpus Analyzer - Dual Interface Engine v5.2")
+app = FastAPI(title="Academic Corpus Analyzer - EditLens Engine v6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +21,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+HF_MODEL = "pangram/editlens_roberta-large"
 
 try:
     nlp = spacy.load("en_core_web_sm")
@@ -139,11 +143,31 @@ def analyze_single_corpus(text: str):
         "readability_grade": readability_grade,
     }
 
+async def call_editlens_hf_api(text: str):
+    if not HF_TOKEN:
+        return {"error": "HF_TOKEN environment variable is not set on Render."}
+
+    url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN.strip()}"}
+    payload = {"inputs": text}
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 503:
+                return {"error": "Model is warming up on Hugging Face servers. Retry in 15 seconds."}
+            else:
+                return {"error": f"HF API HTTP {response.status_code}: {response.text}"}
+    except Exception as e:
+        return {"error": f"Connection Exception: {str(e)}"}
+
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Dual Interface Engine is Live"}
+    return {"status": "Academic Corpus Analyzer - EditLens v6 Engine is Live"}
 
-# المسار الخاص بالواجهة الأولى (التحليل المقارن للمدونات)
+# المسار الخاص بالواجهة الأولى (التحليل المقارن)
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
     human_res = analyze_single_corpus(data.human_text)
@@ -174,9 +198,9 @@ def analyze_corpora(data: CorpusInput):
         "residual_ai_footprint_percentage": residual_footprint,
     }
 
-# المسار الخاص بالواجهة الثانية (الفحص الأحادي)
+# المسار الخاص بالواجهة الثانية (الفحص الأحادي بنموذج EditLens)
 @app.post("/analyze-single")
-def analyze_single_text(data: SingleInput):
+async def analyze_single_text(data: SingleInput):
     if not data.text or not data.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
@@ -184,17 +208,55 @@ def analyze_single_text(data: SingleInput):
     if not metrics:
         raise HTTPException(status_code=400, detail="Text must contain valid words.")
 
+    hf_resp = await call_editlens_hf_api(data.text)
+
+    predicted_class = "Human Baseline"
+    confidence = "moderate"
+    ai_score = 0.0
+    flags = []
+
+    if isinstance(hf_resp, list) and len(hf_resp) > 0:
+        items = hf_resp[0] if isinstance(hf_resp[0], list) else hf_resp
+        top_item = max(items, key=lambda x: x.get("score", 0.0)) if items else {}
+        label = top_item.get("label", "").upper()
+        top_score = top_item.get("score", 0.0)
+
+        if "LABEL_1" in label or "AI" in label or "EDIT" in label:
+            ai_score = round(top_score * 100, 1)
+            predicted_class = "Pure AI" if ai_score > 65 else "AI-Humanized"
+        else:
+            ai_score = round((1 - top_score) * 100, 1) if top_score <= 1.0 else 0.0
+            predicted_class = "Human Baseline" if ai_score < 25 else "AI-Humanized"
+
+        flags.append(f"EditLens Neural Score: {ai_score}% AI intervention detected.")
+        confidence = "high" if top_score > 0.7 else "moderate"
+
+    elif isinstance(hf_resp, dict) and "error" in hf_resp:
+        flags.append(f"HuggingFace Notice: {hf_resp['error']}")
+        if metrics["ai_words_count"] > 0:
+            predicted_class = "Pure AI"
+        else:
+            predicted_class = "Human Baseline"
+    else:
+        flags.append("EditLens prediction evaluated.")
+
+    probs = {
+        "human": round(max(0.0, 100.0 - ai_score), 1),
+        "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1),
+        "ai_humanized": round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
+    }
+
     classification = {
-        "predicted_class": "Human Baseline" if metrics["ai_words_count"] == 0 else "Pure AI",
-        "confidence": "high",
-        "probabilities": {"human": 90.0 if metrics["ai_words_count"] == 0 else 10.0, "pure_ai": 10.0 if metrics["ai_words_count"] == 0 else 90.0, "ai_humanized": 0.0},
+        "predicted_class": predicted_class,
+        "confidence": confidence,
+        "probabilities": probs,
         "sub_scores": {
             "lexical_authenticity": round(metrics["guiraud_r"] * 10, 1),
             "syntactic_complexity": round(metrics["mls"] * 1.5, 1),
             "stylistic_entropy": round(metrics["pos_transition_ratio"] * 100, 1)
         },
-        "diagnostic_flags": ["Corpus analysis completed successfully."],
-        "disclaimer": "Academic Corpus Engine Active."
+        "diagnostic_flags": flags,
+        "disclaimer": "EditLens Neural Intervention Analysis (ICLR 2026 Model Architecture)."
     }
 
     return {
