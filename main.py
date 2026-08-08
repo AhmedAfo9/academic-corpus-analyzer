@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Academic Corpus Analyzer - EditLens Engine v6")
+app = FastAPI(title="Academic Corpus Analyzer - EditLens Engine v6.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,7 +147,8 @@ async def call_editlens_hf_api(text: str):
     if not HF_TOKEN:
         return {"error": "HF_TOKEN environment variable is not set on Render."}
 
-    url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+    # الرابط الجديد المحدث لخوادم Hugging Face Router
+    url = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
     headers = {"Authorization": f"Bearer {HF_TOKEN.strip()}"}
     payload = {"inputs": text}
 
@@ -157,17 +158,16 @@ async def call_editlens_hf_api(text: str):
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 503:
-                return {"error": "Model is warming up on Hugging Face servers. Retry in 15 seconds."}
+                return {"error": "Model is warming up on Hugging Face. Please retry in 15 seconds."}
             else:
-                return {"error": f"HF API HTTP {response.status_code}: {response.text}"}
+                return {"error": f"HF Router HTTP {response.status_code}: {response.text}"}
     except Exception as e:
         return {"error": f"Connection Exception: {str(e)}"}
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - EditLens v6 Engine is Live"}
+    return {"status": "Academic Corpus Analyzer - EditLens Engine v6.1 is Live"}
 
-# المسار الخاص بالواجهة الأولى (التحليل المقارن)
 @app.post("/analyze")
 def analyze_corpora(data: CorpusInput):
     human_res = analyze_single_corpus(data.human_text)
@@ -198,7 +198,6 @@ def analyze_corpora(data: CorpusInput):
         "residual_ai_footprint_percentage": residual_footprint,
     }
 
-# المسار الخاص بالواجهة الثانية (الفحص الأحادي بنموذج EditLens)
 @app.post("/analyze-single")
 async def analyze_single_text(data: SingleInput):
     if not data.text or not data.text.strip():
@@ -217,32 +216,49 @@ async def analyze_single_text(data: SingleInput):
 
     if isinstance(hf_resp, list) and len(hf_resp) > 0:
         items = hf_resp[0] if isinstance(hf_resp[0], list) else hf_resp
-        top_item = max(items, key=lambda x: x.get("score", 0.0)) if items else {}
-        label = top_item.get("label", "").upper()
-        top_score = top_item.get("score", 0.0)
-
-        if "LABEL_1" in label or "AI" in label or "EDIT" in label:
-            ai_score = round(top_score * 100, 1)
-            predicted_class = "Pure AI" if ai_score > 65 else "AI-Humanized"
+        
+        ai_prob = 0.0
+        human_prob = 0.0
+        
+        for item in items:
+            lbl = str(item.get("label", "")).upper()
+            sc = float(item.get("score", 0.0))
+            if "LABEL_1" in lbl or "AI" in lbl or "EDIT" in lbl:
+                ai_prob = sc
+            elif "LABEL_0" in lbl or "HUMAN" in lbl:
+                human_prob = sc
+        
+        if ai_prob > 0.0 or human_prob > 0.0:
+            total = ai_prob + human_prob
+            ai_score = round((ai_prob / total) * 100, 1) if total > 0 else round(ai_prob * 100, 1)
         else:
-            ai_score = round((1 - top_score) * 100, 1) if top_score <= 1.0 else 0.0
-            predicted_class = "Human Baseline" if ai_score < 25 else "AI-Humanized"
+            top_item = max(items, key=lambda x: x.get("score", 0.0)) if items else {}
+            ai_score = round(top_item.get("score", 0.0) * 100, 1)
 
-        flags.append(f"EditLens Neural Score: {ai_score}% AI intervention detected.")
-        confidence = "high" if top_score > 0.7 else "moderate"
+        if ai_score >= 65.0:
+            predicted_class = "Pure AI"
+        elif ai_score >= 30.0:
+            predicted_class = "AI-Humanized"
+        else:
+            predicted_class = "Human Baseline"
+
+        flags.append(f"EditLens Neural Model: {ai_score}% AI intervention detected.")
+        confidence = "high" if abs(ai_score - 50.0) > 25.0 else "moderate"
 
     elif isinstance(hf_resp, dict) and "error" in hf_resp:
         flags.append(f"HuggingFace Notice: {hf_resp['error']}")
         if metrics["ai_words_count"] > 0:
             predicted_class = "Pure AI"
+            ai_score = 85.0
         else:
             predicted_class = "Human Baseline"
+            ai_score = 10.0
     else:
         flags.append("EditLens prediction evaluated.")
 
     probs = {
         "human": round(max(0.0, 100.0 - ai_score), 1),
-        "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1),
+        "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.6, 1),
         "ai_humanized": round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
     }
 
