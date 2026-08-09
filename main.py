@@ -9,14 +9,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 
-try:
-    from sentence_transformers import SentenceTransformer
-    st_model = SentenceTransformer('all-MiniLM-L6-v2')
-except Exception:
-    st_model = None
-
 app = FastAPI(
-    title="Academic Corpus Analyzer - Semantic & Stylometric Engine",
+    title="Academic Corpus Analyzer - Hybrid Transformer Engine",
     description="Multidimensional Linguistic & Stylometric Analysis Platform"
 )
 
@@ -29,6 +23,7 @@ app.add_middleware(
 )
 
 MODAL_EDITLENS_URL = "https://ahmedfalahoraibi--editlens-engine-editlensserver-predict.modal.run"
+MODAL_SEMANTIC_URL = "https://ahmedfalahoraibi--academic-semantic-engine-calc-semantic-sim.modal.run"
 
 try:
     nlp = spacy.load("en_core_web_sm")
@@ -50,7 +45,7 @@ FUNCTION_WORDS = {
     "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there",
     "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through",
     "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've",
-    "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
+    "were", "weren me", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
     "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
     "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
@@ -114,20 +109,17 @@ def compute_mattr(tokens: List[str], window_size: int = 50) -> float:
     
     return round(float(np.mean(ttrs)), 3)
 
-def compute_semantic_similarity(text_a: str, text_b: str, text_c: str) -> Dict[str, float]:
-    if not (text_a and text_b and text_c) or st_model is None:
+async def query_modal_semantic(text_a: str, text_b: str, text_c: str) -> Dict[str, float]:
+    if not (text_a and text_b and text_c):
         return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
-    try:
-        embeddings = st_model.encode([text_a, text_b, text_c])
-        def cos_sim(v1, v2):
-            return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-9))
-        return {
-            "sim_a_b": round(cos_sim(embeddings[0], embeddings[1]) * 100, 1),
-            "sim_a_c": round(cos_sim(embeddings[0], embeddings[2]) * 100, 1),
-            "sim_b_c": round(cos_sim(embeddings[1], embeddings[2]) * 100, 1)
-        }
-    except Exception:
-        return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            res = await client.post(MODAL_SEMANTIC_URL, json={"text_a": text_a, "text_b": text_b, "text_c": text_c})
+            if res.status_code == 200:
+                return res.json()
+            return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
+        except Exception:
+            return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
 
 def compute_burrows_delta(text_a: str, text_b: str, text_c: str) -> Dict[str, float]:
     if not (text_a and text_b and text_c):
@@ -344,7 +336,7 @@ async def query_modal_editlens(text: str):
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Phase 1 Active"}
+    return {"status": "Academic Corpus Analyzer - Hybrid Transformer Engine Active"}
 
 @app.post("/analyze-single")
 async def analyze_single_text(request: Request):
@@ -454,7 +446,7 @@ async def analyze_corpora(request: Request):
         metrics_result.get("ai_humanized")
     )
 
-    semantic_sim = compute_semantic_similarity(human_text, ai_text, humanized_text)
+    semantic_sim = await query_modal_semantic(human_text, ai_text, humanized_text)
     burrows_delta = compute_burrows_delta(human_text, ai_text, humanized_text)
 
     return {
