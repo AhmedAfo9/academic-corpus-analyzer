@@ -6,3 +6,5 @@ pandas
 pydantic
 textstat
 httpx>=0.24.0
+sentence-transformers
+numpy
