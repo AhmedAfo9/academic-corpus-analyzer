@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 
 app = FastAPI(
-    title="Academic Corpus Analyzer - Research Engine",
+    title="Academic Corpus Analyzer - Hybrid Research Engine",
     description="Multidimensional Linguistic & Stylometric Analysis Platform"
 )
 
@@ -43,7 +43,7 @@ FUNCTION_WORDS = {
     "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some",
     "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there",
     "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through",
-    "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've",
+    "to", "too", "under", "until", "up", "very", "was", "wasn me", "we", "we'd", "we'll", "we're", "we've",
     "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
     "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
     "you're", "you've", "your", "yours", "yourself", "yourselves"
@@ -124,7 +124,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
 
     V = len(set(words))
 
-    # 1. Lexical Diversity Suite
     ttr = round(V / N, 3)
     guiraud_r = round(float(V / np.sqrt(N)), 2)
     herdan_c = round(float(math.log(V) / math.log(N)), 3) if N > 1 and V > 1 else 0.0
@@ -144,7 +143,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     function_ratio = round((function_count / N) * 100, 1)
     content_ratio = round((content_count / N) * 100, 1)
 
-    # 2. Syntactic Dependency & Corrected Passive Voice Analysis
     def get_node_depth(node):
         if not list(node.children):
             return 1
@@ -152,7 +150,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
 
     tree_depths = [get_node_depth(sent.root) for sent in doc.sents]
     mean_tree_depth = round(float(np.mean(tree_depths)), 2)
-    max_tree_depth = int(np.max(tree_depths))
 
     dep_distances = []
     prepositional_phrases = 0
@@ -176,10 +173,7 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
             passive_sentences_count += 1
 
     mean_dep_distance = round(float(np.mean(dep_distances)), 2) if dep_distances else 0.0
-    
-    # تصحيح دقيق لمعادلة المبني للمجهول: نسبة الجمل التي تحتوي مبني للمجهول (المقياس المعياري)
     passive_sentence_ratio = round((passive_sentences_count / S) * 100, 1)
-    # نسبة أفعال المبني للمجهول من إجمالي الأفعال
     passive_verb_ratio = round((passive_verbs / max(1, total_verbs)) * 100, 1)
 
     prep_phrase_density = round((prepositional_phrases / N) * 100, 1)
@@ -188,7 +182,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     sent_lengths = [len([t for t in sent if t.is_alpha]) for sent in doc.sents]
     sent_length_sd = round(float(np.std(sent_lengths)), 2) if len(sent_lengths) > 1 else 0.0
 
-    # 3. POS Distribution, Entropy & Nominalization
     pos_counts = {}
     noun_count = 0
     verb_count = 0
@@ -209,7 +202,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
 
     nominalization_ratio = round(noun_count / max(1, verb_count), 2)
 
-    # 4. Punctuation Profile & Entropy
     punct_chars = {",": 0, ".": 0, ";": 0, ":": 0, "-": 0, "(": 0, ")": 0, "?": 0, "!": 0, '"': 0, "'": 0}
     total_punct = 0
     for char in text:
@@ -222,12 +214,10 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     punct_probs = [c / total_punct for c in punct_chars.values() if c > 0]
     punct_entropy = round(float(-sum(p * math.log2(p) for p in punct_probs)), 3) if punct_probs else 0.0
 
-    # 5. Academic & Stylometric Vocabulary
     awl_count = sum(1 for w in words if w in AWL_KEYWORDS)
     awl_density = round((awl_count / N) * 100, 1)
     ai_buzzwords_count = sum(1 for w in words if w in AI_BUZZWORDS)
 
-    # 6. Readability Suite
     syllables = sum(len(re.findall(r'[aeiouy]+', w)) for w in words)
     flesch_reading_ease = round(206.835 - 1.015 * (N / S) - 84.6 * (syllables / N), 1)
     flesch_kincaid_grade = round(0.39 * (N / S) + 11.8 * (syllables / N) - 15.59, 1)
@@ -247,9 +237,8 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
         "mls": mls,
         "sent_length_sd": sent_length_sd,
         "mean_tree_depth": mean_tree_depth,
-        "max_tree_depth": max_tree_depth,
         "mean_dep_distance": mean_dep_distance,
-        "passive_ratio": passive_sentence_ratio,  # النسب المؤكدة الصحيحة
+        "passive_ratio": passive_sentence_ratio,
         "passive_verb_ratio": passive_verb_ratio,
         "prep_phrase_density": prep_phrase_density,
         "pos_entropy": pos_entropy,
@@ -305,7 +294,7 @@ async def query_modal_editlens(text: str):
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Research Engine Live"}
+    return {"status": "Academic Corpus Analyzer - Hybrid Fusion Engine Active"}
 
 @app.post("/analyze-single")
 async def analyze_single_text(request: Request):
@@ -320,28 +309,64 @@ async def analyze_single_text(request: Request):
 
     ai_score, err = await query_modal_editlens(text)
 
-    predicted_class = "Pure AI" if ai_score >= 50.0 else ("AI-Humanized" if ai_score >= 20.0 else "Human Baseline")
+    # --- HYBRID FEATURE FUSION CLASSIFICATION LOGIC ---
+    # كشف تشوهات أدوات التأنّس اللغوية (Humanizer Anomaly Indicators)
+    is_lexically_degraded = (metrics["mtld"] < 65.0) or (metrics["ttr"] < 0.52)
+    is_punct_stripped = metrics["punct_density"] < 14.0
+    is_shortened_sentences = metrics["mls"] < 16.0
+
+    diagnostic_flags = [
+        f"Neural Model Prediction: {ai_score}% raw AI probability footprint."
+    ]
+
+    # محرك الدمج الميزاتي لتنقيح القرار العصبي
+    if ai_score >= 45.0:
+        if is_lexically_degraded or is_punct_stripped:
+            predicted_class = "AI-Humanized"
+            diagnostic_flags.append("Humanizer Anomaly Detected: High neural footprint overridden by lexical degradation (MTLD/TTR drop) & punctuation stripping.")
+        else:
+            predicted_class = "Pure AI"
+            diagnostic_flags.append("Pure AI Signature: High neural trace combined with elevated MTLD lexical richness.")
+    elif ai_score >= 20.0:
+        predicted_class = "AI-Humanized"
+        diagnostic_flags.append("Moderate Neural Trace: Text exhibits stylistic modifications characteristic of paraphrasing engines.")
+    else:
+        if is_lexically_degraded and is_shortened_sentences:
+            predicted_class = "AI-Humanized"
+            diagnostic_flags.append("Low Neural Trace but High Stylometric Anomaly: Sentence structure and vocabulary degradation indicate deep automated paraphrasing.")
+        else:
+            predicted_class = "Human Baseline"
+            diagnostic_flags.append("Human Baseline: Low neural footprint with natural lexical richness and syntactic variance.")
+
+    # تعديل الاحتماليات بناءً على الصنف المكتشف
+    if predicted_class == "AI-Humanized":
+        prob_humanized = round(max(55.0, ai_score), 1)
+        prob_pure_ai = round(min(40.0, ai_score * 0.4), 1)
+        prob_human = round(max(0.0, 100.0 - prob_humanized - prob_pure_ai), 1)
+    elif predicted_class == "Pure AI":
+        prob_pure_ai = round(max(60.0, ai_score), 1)
+        prob_humanized = round((100.0 - prob_pure_ai) * 0.7, 1)
+        prob_human = round(max(0.0, 100.0 - prob_pure_ai - prob_humanized), 1)
+    else:
+        prob_human = round(max(75.0, 100.0 - ai_score), 1)
+        prob_humanized = round((100.0 - prob_human) * 0.6, 1)
+        prob_pure_ai = round(max(0.0, 100.0 - prob_human - prob_humanized), 1)
 
     return {
         "metrics": metrics,
         "classification": {
             "predicted_class": predicted_class,
             "probabilities": {
-                "human": round(max(0.0, 100.0 - ai_score), 1),
-                "pure_ai": round(ai_score if predicted_class == "Pure AI" else ai_score * 0.5, 1),
-                "ai_humanized": round(ai_score if predicted_class == "AI-Humanized" else max(0.0, 100.0 - abs(50.0 - ai_score) * 2), 1)
+                "human": prob_human,
+                "pure_ai": prob_pure_ai,
+                "ai_humanized": prob_humanized
             },
             "sub_scores": {
                 "lexical_authenticity": round(min(100.0, metrics["mtld"] / 1.2), 1),
                 "syntactic_complexity": round(min(100.0, metrics["mean_tree_depth"] * 15), 1),
                 "stylistic_entropy": round(min(100.0, metrics["pos_entropy"] * 25), 1)
             },
-            "diagnostic_flags": [
-                f"Model-Based Detection Score: {ai_score}% AI-associated stylistic footprint.",
-                f"MTLD Richness Score: {metrics['mtld']}",
-                f"Mean Dependency Tree Depth: {metrics['mean_tree_depth']}",
-                f"Passive Sentence Ratio: {metrics['passive_ratio']}%"
-            ]
+            "diagnostic_flags": diagnostic_flags
         }
     }
 
@@ -364,7 +389,7 @@ async def analyze_corpora(request: Request):
         if txt and txt.strip():
             keys.append(key)
             texts.append(txt)
-            active_tasks = tasks.append(query_modal_editlens(txt))
+            tasks.append(query_modal_editlens(txt))
 
     if not tasks:
         raise HTTPException(status_code=400, detail="Please provide text in at least one corpus.")
