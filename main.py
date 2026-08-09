@@ -9,8 +9,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 
+try:
+    from sentence_transformers import SentenceTransformer
+    st_model = SentenceTransformer('all-MiniLM-L6-v2')
+except Exception:
+    st_model = None
+
 app = FastAPI(
-    title="Academic Corpus Analyzer - Hybrid Research Engine",
+    title="Academic Corpus Analyzer - Semantic & Stylometric Engine",
     description="Multidimensional Linguistic & Stylometric Analysis Platform"
 )
 
@@ -43,7 +49,7 @@ FUNCTION_WORDS = {
     "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some",
     "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there",
     "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through",
-    "to", "too", "under", "until", "up", "very", "was", "wasn me", "we", "we'd", "we'll", "we're", "we've",
+    "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've",
     "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
     "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
     "you're", "you've", "your", "yours", "yourself", "yourselves"
@@ -107,6 +113,51 @@ def compute_mattr(tokens: List[str], window_size: int = 50) -> float:
         ttrs.append(len(set(window)) / window_size)
     
     return round(float(np.mean(ttrs)), 3)
+
+def compute_semantic_similarity(text_a: str, text_b: str, text_c: str) -> Dict[str, float]:
+    if not (text_a and text_b and text_c) or st_model is None:
+        return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
+    try:
+        embeddings = st_model.encode([text_a, text_b, text_c])
+        def cos_sim(v1, v2):
+            return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-9))
+        return {
+            "sim_a_b": round(cos_sim(embeddings[0], embeddings[1]) * 100, 1),
+            "sim_a_c": round(cos_sim(embeddings[0], embeddings[2]) * 100, 1),
+            "sim_b_c": round(cos_sim(embeddings[1], embeddings[2]) * 100, 1)
+        }
+    except Exception:
+        return {"sim_a_b": 0.0, "sim_a_c": 0.0, "sim_b_c": 0.0}
+
+def compute_burrows_delta(text_a: str, text_b: str, text_c: str) -> Dict[str, float]:
+    if not (text_a and text_b and text_c):
+        return {"delta_a_b": 0.0, "delta_a_c": 0.0, "delta_b_c": 0.0}
+    
+    def get_fw_freqs(txt):
+        tokens = [t.text.lower() for t in nlp(txt) if t.is_alpha]
+        tot = max(1, len(tokens))
+        return {fw: tokens.count(fw) / tot for fw in FUNCTION_WORDS}
+
+    f_a = get_fw_freqs(text_a)
+    f_b = get_fw_freqs(text_b)
+    f_c = get_fw_freqs(text_c)
+
+    fw_list = list(FUNCTION_WORDS)
+    mat = np.array([
+        [f_a[fw] for fw in fw_list],
+        [f_b[fw] for fw in fw_list],
+        [f_c[fw] for fw in fw_list]
+    ])
+    
+    means = np.mean(mat, axis=0)
+    stds = np.std(mat, axis=0) + 1e-9
+    z_mat = (mat - means) / stds
+
+    return {
+        "delta_a_b": round(float(np.mean(np.abs(z_mat[0] - z_mat[1]))), 3),
+        "delta_a_c": round(float(np.mean(np.abs(z_mat[0] - z_mat[2]))), 3),
+        "delta_b_c": round(float(np.mean(np.abs(z_mat[1] - z_mat[2]))), 3)
+    }
 
 def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
     if not text or not text.strip():
@@ -210,7 +261,6 @@ def compute_comprehensive_metrics(text: str) -> Optional[Dict[str, Any]]:
             total_punct += 1
 
     punct_density = round((total_punct / N) * 100, 1)
-    
     punct_probs = [c / total_punct for c in punct_chars.values() if c > 0]
     punct_entropy = round(float(-sum(p * math.log2(p) for p in punct_probs)), 3) if punct_probs else 0.0
 
@@ -294,7 +344,7 @@ async def query_modal_editlens(text: str):
 
 @app.get("/")
 def home():
-    return {"status": "Academic Corpus Analyzer - Hybrid Fusion Engine Active"}
+    return {"status": "Academic Corpus Analyzer - Phase 1 Active"}
 
 @app.post("/analyze-single")
 async def analyze_single_text(request: Request):
@@ -309,8 +359,6 @@ async def analyze_single_text(request: Request):
 
     ai_score, err = await query_modal_editlens(text)
 
-    # --- HYBRID FEATURE FUSION CLASSIFICATION LOGIC ---
-    # كشف تشوهات أدوات التأنّس اللغوية (Humanizer Anomaly Indicators)
     is_lexically_degraded = (metrics["mtld"] < 65.0) or (metrics["ttr"] < 0.52)
     is_punct_stripped = metrics["punct_density"] < 14.0
     is_shortened_sentences = metrics["mls"] < 16.0
@@ -319,7 +367,6 @@ async def analyze_single_text(request: Request):
         f"Neural Model Prediction: {ai_score}% raw AI probability footprint."
     ]
 
-    # محرك الدمج الميزاتي لتنقيح القرار العصبي
     if ai_score >= 45.0:
         if is_lexically_degraded or is_punct_stripped:
             predicted_class = "AI-Humanized"
@@ -338,7 +385,6 @@ async def analyze_single_text(request: Request):
             predicted_class = "Human Baseline"
             diagnostic_flags.append("Human Baseline: Low neural footprint with natural lexical richness and syntactic variance.")
 
-    # تعديل الاحتماليات بناءً على الصنف المكتشف
     if predicted_class == "AI-Humanized":
         prob_humanized = round(max(55.0, ai_score), 1)
         prob_pure_ai = round(min(40.0, ai_score * 0.4), 1)
@@ -408,9 +454,14 @@ async def analyze_corpora(request: Request):
         metrics_result.get("ai_humanized")
     )
 
+    semantic_sim = compute_semantic_similarity(human_text, ai_text, humanized_text)
+    burrows_delta = compute_burrows_delta(human_text, ai_text, humanized_text)
+
     return {
         "status": "success",
         "residual_ai_footprint_percentage": residual_signal,
         "residual_ai_style_signal": residual_signal,
+        "semantic_similarity": semantic_sim,
+        "burrows_delta": burrows_delta,
         "metrics": metrics_result
     }
