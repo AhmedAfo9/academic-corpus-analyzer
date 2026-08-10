@@ -396,6 +396,45 @@ async def query_modal_editlens(text: str):
         except Exception as e:
             return 15.0, str(e)
 
+async def process_single_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
+    c_text = chunk["text"]
+    metrics = compute_comprehensive_metrics(c_text)
+    ai_score, _ = await query_modal_editlens(c_text)
+
+    if not metrics:
+        return {
+            "chunk_id": chunk["chunk_id"],
+            "word_count": chunk["word_count"],
+            "ai_score": ai_score,
+            "classification": "Human Baseline",
+            "metrics": {}
+        }
+
+    is_lexically_degraded = (metrics["mtld"] < 65.0) or (metrics["ttr"] < 0.52)
+    is_punct_stripped = metrics["punct_density"] < 14.0
+    is_shortened = metrics["mls"] < 16.0
+
+    if ai_score >= 45.0:
+        if is_lexically_degraded or is_punct_stripped:
+            predicted_class = "AI-Humanized"
+        else:
+            predicted_class = "Pure AI"
+    elif ai_score >= 20.0:
+        predicted_class = "AI-Humanized"
+    else:
+        if is_lexically_degraded and is_shortened:
+            predicted_class = "AI-Humanized"
+        else:
+            predicted_class = "Human Baseline"
+
+    return {
+        "chunk_id": chunk["chunk_id"],
+        "word_count": chunk["word_count"],
+        "ai_score": ai_score,
+        "classification": predicted_class,
+        "metrics": metrics
+    }
+
 @app.get("/")
 def home():
     return {"status": "Academic Corpus Analyzer - Hybrid Transformer Engine Active"}
@@ -540,8 +579,48 @@ async def analyze_uploaded_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Document appears to be empty or contains no readable text.")
 
     chunks = split_text_into_chunks(extracted_text, target_chunk_words=500)
-    total_words = sum(c["word_count"] for c in chunks)
+    
+    # Process chunks in parallel using asyncio.gather
+    chunk_tasks = [process_single_chunk(c) for c in chunks]
+    chunk_results = await asyncio.gather(*chunk_tasks)
+
+    total_words = sum(c["word_count"] for c in chunk_results)
     estimated_pages = max(1, math.ceil(total_words / 350))
+
+    # Cross-Chunk Longitudinal Forensic Metrics
+    ai_scores = [c["ai_score"] for c in chunk_results]
+    avg_ai_score = round(float(np.mean(ai_scores)), 1) if ai_scores else 0.0
+
+    pos_entropies = [c["metrics"]["pos_entropy"] for c in chunk_results if c.get("metrics") and "pos_entropy" in c["metrics"]]
+    tree_depths = [c["metrics"]["mean_tree_depth"] for c in chunk_results if c.get("metrics") and "mean_tree_depth" in c["metrics"]]
+    mls_values = [c["metrics"]["mls"] for c in chunk_results if c.get("metrics") and "mls" in c["metrics"]]
+
+    std_pos_entropy = round(float(np.std(pos_entropies)), 3) if len(pos_entropies) > 1 else 0.15
+    std_tree_depth = round(float(np.std(tree_depths)), 2) if len(tree_depths) > 1 else 0.8
+    std_mls = round(float(np.std(mls_values)), 2) if len(mls_values) > 1 else 4.0
+
+    # Detect Grounded AI (Ultra-low variance + persistent artificial structure)
+    # Human text naturally fluctuates (std_pos > 0.12, std_tree > 0.6).
+    # AI Grounded text stays unnaturally consistent (std_pos < 0.07, std_tree < 0.4).
+    is_unnaturally_consistent = (std_pos_entropy < 0.08) and (std_tree_depth < 0.45)
+    
+    if is_unnaturally_consistent and len(chunks) >= 3:
+        grounded_ai_risk = round(max(65.0, 100.0 - (std_pos_entropy * 500) - (std_tree_depth * 40)), 1)
+        grounded_ai_flag = "Grounded AI Detected: Ultra-low cross-chunk variance reveals source-constrained artificial generation across pages."
+    else:
+        grounded_ai_risk = round(min(35.0, std_pos_entropy * 100), 1)
+        grounded_ai_flag = "Natural Human Variance: Document exhibits organic stylistic fluctuation across sections."
+
+    # Breakdown Counts for Heatmap
+    human_count = sum(1 for c in chunk_results if c["classification"] == "Human Baseline")
+    humanized_count = sum(1 for c in chunk_results if c["classification"] == "AI-Humanized")
+    pure_ai_count = sum(1 for c in chunk_results if c["classification"] == "Pure AI")
+
+    overall_class = "Human Baseline"
+    if grounded_ai_risk >= 60.0 or pure_ai_count >= len(chunks) * 0.4:
+        overall_class = "Pure AI / Grounded AI"
+    elif humanized_count >= len(chunks) * 0.35:
+        overall_class = "AI-Humanized"
 
     return {
         "status": "success",
@@ -550,8 +629,28 @@ async def analyze_uploaded_document(file: UploadFile = File(...)):
         "total_words": total_words,
         "estimated_pages": estimated_pages,
         "total_chunks": len(chunks),
-        "chunks_summary": [
-            {"chunk_id": c["chunk_id"], "word_count": c["word_count"]}
-            for c in chunks
+        "overall_classification": overall_class,
+        "overall_ai_footprint_avg": avg_ai_score,
+        "grounded_ai_risk_score": grounded_ai_risk,
+        "grounded_ai_flag": grounded_ai_flag,
+        "longitudinal_variance": {
+            "std_pos_entropy": std_pos_entropy,
+            "std_tree_depth": std_tree_depth,
+            "std_mls": std_mls
+        },
+        "heatmap_distribution": {
+            "human_chunks": human_count,
+            "humanized_chunks": humanized_count,
+            "pure_ai_chunks": pure_ai_count
+        },
+        "chunk_breakdown": [
+            {
+                "chunk_id": c["chunk_id"],
+                "word_count": c["word_count"],
+                "ai_score": c["ai_score"],
+                "classification": c["classification"],
+                "page_estimate": math.ceil(c["chunk_id"] * 500 / 350)
+            }
+            for c in chunk_results
         ]
     }
