@@ -7,3 +7,5 @@ pydantic
 textstat
 httpx>=0.24.0
 numpy
+pypdf
+python-docx
