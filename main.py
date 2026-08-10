@@ -1,17 +1,20 @@
 import os
 import re
+import io
 import math
 import asyncio
 import numpy as np
 import spacy
 import httpx
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+import pypdf
+import docx
 
 app = FastAPI(
     title="Academic Corpus Analyzer - Hybrid Transformer Engine",
-    description="Multidimensional Linguistic & Stylometric Analysis Platform"
+    description="Multidimensional Linguistic, Stylometric & Document Forensics Platform"
 )
 
 app.add_middleware(
@@ -45,7 +48,7 @@ FUNCTION_WORDS = {
     "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there",
     "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through",
     "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've",
-    "were", "weren me", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
+    "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who",
     "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
     "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
@@ -66,6 +69,65 @@ AI_BUZZWORDS = {
     "interplay", "beacon", "paramount", "fostering", "harnessing", "unwavering", "vibrant",
     "holistic", "seamless", "synergy", "paradigm", "transformative", "elucidate"
 }
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        extracted_pages = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                extracted_pages.append(t)
+        return "\n".join(extracted_pages)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse PDF document: {str(e)}")
+
+def extract_text_from_docx(file_bytes: bytes) -> str:
+    try:
+        doc = docx.Document(io.BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse DOCX document: {str(e)}")
+
+def split_text_into_chunks(text: str, target_chunk_words: int = 500) -> List[Dict[str, Any]]:
+    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks = []
+    current_words = []
+    current_count = 0
+    chunk_index = 1
+
+    for p in paragraphs:
+        p_words = p.split()
+        if not p_words:
+            continue
+        current_words.extend(p_words)
+        current_count += len(p_words)
+
+        if current_count >= target_chunk_words:
+            chunk_str = " ".join(current_words)
+            chunks.append({
+                "chunk_id": chunk_index,
+                "word_count": len(current_words),
+                "text": chunk_str
+            })
+            chunk_index += 1
+            current_words = []
+            current_count = 0
+
+    if current_words:
+        chunk_str = " ".join(current_words)
+        if chunks and len(current_words) < 150:
+            chunks[-1]["text"] += " " + chunk_str
+            chunks[-1]["word_count"] += len(current_words)
+        else:
+            chunks.append({
+                "chunk_id": chunk_index,
+                "word_count": len(current_words),
+                "text": chunk_str
+            })
+
+    return chunks
 
 def compute_mtld(tokens: List[str], threshold: float = 0.72) -> float:
     if len(tokens) < 10:
@@ -456,4 +518,40 @@ async def analyze_corpora(request: Request):
         "semantic_similarity": semantic_sim,
         "burrows_delta": burrows_delta,
         "metrics": metrics_result
+    }
+
+@app.post("/analyze-document")
+async def analyze_uploaded_document(file: UploadFile = File(...)):
+    max_bytes = 30 * 1024 * 1024  # 30 MB
+    content = await file.read()
+    
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail="File size exceeds the 30MB limit.")
+
+    filename = file.filename.lower()
+    if filename.endswith(".pdf"):
+        extracted_text = extract_text_from_pdf(content)
+    elif filename.endswith(".docx"):
+        extracted_text = extract_text_from_docx(content)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported format. Only PDF and DOCX files are allowed.")
+
+    if not extracted_text or len(extracted_text.strip()) < 50:
+        raise HTTPException(status_code=400, detail="Document appears to be empty or contains no readable text.")
+
+    chunks = split_text_into_chunks(extracted_text, target_chunk_words=500)
+    total_words = sum(c["word_count"] for c in chunks)
+    estimated_pages = max(1, math.ceil(total_words / 350))
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "file_size_mb": round(len(content) / (1024 * 1024), 2),
+        "total_words": total_words,
+        "estimated_pages": estimated_pages,
+        "total_chunks": len(chunks),
+        "chunks_summary": [
+            {"chunk_id": c["chunk_id"], "word_count": c["word_count"]}
+            for c in chunks
+        ]
     }
